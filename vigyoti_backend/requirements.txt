@@ -1,0 +1,56 @@
+# FastAPI and Server
+fastapi
+uvicorn
+mangum
+python-multipart
+pydantic
+pydantic-settings
+
+# Database and Caching
+sqlalchemy
+asyncpg
+redis
+aiofiles
+
+# Authentication and Security
+python-jose
+passlib
+bcrypt
+firebase-admin
+
+# AWS
+boto3
+
+# OpenAI and AI Services
+openai
+replicate
+tiktoken
+
+# Content Processing
+youtube-transcript-api
+python-docx
+docx2pdf
+pypdf2
+python-pptx
+mammoth
+mutagen
+beautifulsoup4
+firecrawl
+
+# HTTP and Networking
+httpx
+requests
+tenacity
+
+# Environment and Configuration
+python-dotenv
+
+# Monitoring and Tracing
+arize-phoenix
+arize-phoenix-otel
+openinference-instrumentation-openai
+
+# Testing
+pytest
+pytest-asyncio
+httpx
