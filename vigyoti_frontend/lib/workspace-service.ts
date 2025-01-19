@@ -106,8 +106,15 @@ export class WorkspaceService {
   }
 
   static async updateProject(projectId: string, updates: Partial<Project>): Promise<void> {
-    // Implementation needed
-    throw new Error('Method not implemented');
+    try {
+      await adminDb.collection('projects').doc(projectId).update({
+        ...updates,
+        updatedAt: Date.now(),
+      });
+    } catch (error) {
+      console.error('Error updating project:', error);
+      throw error;
+    }
   }
 
   static async deleteProject(projectId: string): Promise<void> {

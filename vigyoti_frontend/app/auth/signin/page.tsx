@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 export default function SignIn() {
   const handleSignIn = async () => {
     await signIn('google', {
-      callbackUrl: '/pricing',
+      callbackUrl: '/',
       redirect: true,
     });
   };

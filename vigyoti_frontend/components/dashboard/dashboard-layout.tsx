@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -22,6 +22,10 @@ import {
   Sparkles,
   ChevronDown,
   LogOut,
+  FileText,
+  Send,
+  Briefcase,
+  ChevronRight
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,21 +36,23 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { WorkspaceClient } from '@/lib/workspace-client';
+import { Workspace, Project } from '@/types/workspace';
 
-interface SidebarItem {
+interface SidebarSection {
   title: string;
   items: {
     title: string;
     href: string;
-    icon: React.ComponentType<{ className?: string }>;
+    icon: any;
   }[];
 }
 
-const sidebarItems: SidebarItem[] = [
+const sidebarSections = [
   {
     title: 'Content',
     items: [
-      { title: 'My Projects', href: '/dashboard/projects', icon: FileEdit },
+      { title: 'My Projects', href: '/dashboard/projects', icon: Briefcase },
       { title: 'Drafts', href: '/dashboard/drafts', icon: FileEdit },
       { title: 'Scheduled', href: '/dashboard/scheduled', icon: Clock },
       { title: 'Published', href: '/dashboard/published', icon: CheckCircle },
@@ -99,6 +105,57 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const { data: session } = useSession();
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    'Content': true,
+    'Posts Scheduling': true,
+    'Workspace Settings': true
+  });
+
+  useEffect(() => {
+    const loadWorkspacesAndProjects = async () => {
+      if (session?.user?.id) {
+        try {
+          const userWorkspaces = await WorkspaceClient.getWorkspaces();
+          setWorkspaces(userWorkspaces);
+          
+          if (userWorkspaces.length > 0) {
+            const defaultWorkspace = userWorkspaces[0];
+            setSelectedWorkspace(defaultWorkspace);
+            
+            const workspaceProjects = await WorkspaceClient.getWorkspaceProjects(defaultWorkspace.id);
+            setProjects(workspaceProjects);
+          }
+        } catch (error) {
+          console.error('Error loading workspaces:', error);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadWorkspacesAndProjects();
+  }, [session?.user?.id]);
+
+  const handleWorkspaceChange = async (workspace: Workspace) => {
+    setSelectedWorkspace(workspace);
+    try {
+      const workspaceProjects = await WorkspaceClient.getWorkspaceProjects(workspace.id);
+      setProjects(workspaceProjects);
+    } catch (error) {
+      console.error('Error loading projects:', error);
+    }
+  };
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({
+      ...prev,
+      [section]: !prev[section]
+    }));
+  };
 
   const userInitials = session?.user?.name
     ?.split(' ')
@@ -108,7 +165,7 @@ export default function DashboardLayout({
 
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* Header */}
+      {/* Header with workspace selector */}
       <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b bg-white px-4 shadow-sm">
         <div className="flex items-center gap-4">
           <Link href="/dashboard">
@@ -120,9 +177,35 @@ export default function DashboardLayout({
               className="h-8 w-auto"
             />
           </Link>
+          {workspaces.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="gap-2">
+                  <span>{selectedWorkspace?.name || 'Select Workspace'}</span>
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                {workspaces.map((workspace) => (
+                  <DropdownMenuItem 
+                    key={workspace.id}
+                    onClick={() => handleWorkspaceChange(workspace)}
+                  >
+                    {workspace.name}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/workspaces" className="flex items-center">
+                    <Plus className="mr-2 h-4 w-4" />
+                    <span>Create New Workspace</span>
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-blue-600">{workspaceName}</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="gap-2">
@@ -156,11 +239,12 @@ export default function DashboardLayout({
       <div className="flex">
         {/* Sidebar */}
         <aside className={cn(
-          "fixed left-0 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-white transition-transform",
+          "fixed left-0 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-white transition-transform overflow-y-auto",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         )}>
           <div className="flex h-full flex-col gap-2 p-4">
             <div className="space-y-4">
+              {/* Quick Actions */}
               <div className="space-y-2">
                 <Button className="w-full justify-start gap-2" variant="secondary">
                   <Plus className="h-4 w-4" />
@@ -172,24 +256,70 @@ export default function DashboardLayout({
                 </Button>
               </div>
 
-              {sidebarItems.map((section, index) => (
-                <div key={section.title} className={cn("space-y-2", index > 0 && "pt-4")}>
+              {/* Current Project Selector */}
+              {selectedWorkspace && projects.length > 0 && (
+                <div className="space-y-2 border-b pb-4">
                   <h3 className="px-2 text-xs font-semibold uppercase text-gray-500">
-                    {section.title}
+                    Current Project
                   </h3>
-                  {section.items.map((item) => (
-                    <Link key={item.href} href={item.href}>
-                      <span className={cn(
-                        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium",
-                        pathname === item.href
-                          ? "bg-gray-100 text-gray-900"
-                          : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                      )}>
-                        <item.icon className="h-4 w-4" />
-                        {item.title}
-                      </span>
-                    </Link>
-                  ))}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="w-full justify-between">
+                        <span className="truncate">{projects[0].name}</span>
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {projects.map((project) => (
+                        <DropdownMenuItem 
+                          key={project.id}
+                          onClick={() => window.location.href = `/project/${project.id}`}
+                        >
+                          {project.name}
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem 
+                        onClick={() => window.location.href = `/workspace/${selectedWorkspace.id}`}
+                      >
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create New Project
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              )}
+
+              {/* Navigation Sections */}
+              {sidebarSections.map((section, index) => (
+                <div key={section.title} className={cn("space-y-2", index > 0 && "pt-4")}>
+                  <button
+                    onClick={() => toggleSection(section.title)}
+                    className="flex w-full items-center justify-between px-2 text-xs font-semibold uppercase text-gray-500 hover:text-gray-900"
+                  >
+                    <span>{section.title}</span>
+                    <ChevronRight className={cn(
+                      "h-4 w-4 transition-transform",
+                      expandedSections[section.title] && "rotate-90"
+                    )} />
+                  </button>
+                  {expandedSections[section.title] && (
+                    <div className="space-y-1">
+                      {section.items.map((item) => (
+                        <Link key={item.href} href={item.href}>
+                          <span className={cn(
+                            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium",
+                            pathname === item.href
+                              ? "bg-gray-100 text-gray-900"
+                              : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                          )}>
+                            <item.icon className="h-4 w-4" />
+                            {item.title}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -198,7 +328,7 @@ export default function DashboardLayout({
 
         {/* Main Content */}
         <main className={cn(
-          "flex-1 transition-all",
+          "flex-1 transition-all duration-200",
           isSidebarOpen ? "ml-64" : "ml-0"
         )}>
           <div className="container mx-auto p-6">

@@ -57,11 +57,13 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     async redirect({ url, baseUrl }) {
-      // After successful sign in, redirect to pricing page
-      if (url === baseUrl) {
-        return `${baseUrl}/pricing`;
+      // If the URL is not the base URL, respect the requested URL
+      if (url !== baseUrl) {
+        return url;
       }
-      return url;
+      
+      // Otherwise, redirect to the home page which will handle the routing logic
+      return baseUrl;
     },
   },
   pages: {

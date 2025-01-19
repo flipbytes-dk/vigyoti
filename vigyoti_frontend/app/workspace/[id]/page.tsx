@@ -6,9 +6,11 @@ import { WorkspaceClient } from '@/lib/workspace-client';
 import { Workspace, Project } from '@/types/workspace';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Plus, Loader2, ArrowLeft } from 'lucide-react';
+import { Plus, Loader2, ArrowLeft, Pencil } from 'lucide-react';
 import Link from 'next/link';
 import { CreateProjectDialog } from '@/components/workspace/create-project-dialog';
+import { Input } from '@/components/ui/input';
+import { EditProjectDialog } from '@/components/workspace/edit-project-dialog';
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -17,6 +19,10 @@ export default function WorkspacePage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
 
   useEffect(() => {
     const loadWorkspaceAndProjects = async () => {
@@ -26,9 +32,12 @@ export default function WorkspacePage() {
           WorkspaceClient.getWorkspaceProjects(workspaceId),
         ]);
         setWorkspace(workspaceData);
+        setNewName(workspaceData?.name || '');
         setProjects(projectsData);
+        setError(null);
       } catch (error) {
         console.error('Error loading workspace:', error);
+        setError('Failed to load workspace. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -51,8 +60,35 @@ export default function WorkspacePage() {
         }
       }
       setIsCreateProjectDialogOpen(false);
+      setError(null);
     } catch (error) {
       console.error('Error creating project:', error);
+      setError('Failed to create project. Please try again.');
+    }
+  };
+
+  const handleUpdateName = async () => {
+    if (!workspace || !newName.trim()) return;
+    try {
+      const updatedWorkspace = await WorkspaceClient.updateWorkspace(workspaceId, { name: newName.trim() });
+      setWorkspace(updatedWorkspace);
+      setIsEditingName(false);
+      setError(null);
+    } catch (error) {
+      console.error('Error updating workspace name:', error);
+      setError('Failed to update workspace name. Please try again.');
+    }
+  };
+
+  const handleUpdateProject = async (projectId: string, name: string, description?: string) => {
+    try {
+      const updatedProject = await WorkspaceClient.updateProject(projectId, { name, description });
+      setProjects(projects.map(p => p.id === projectId ? updatedProject : p));
+      setEditingProject(null);
+      setError(null);
+    } catch (error) {
+      console.error('Error updating project:', error);
+      setError('Failed to update project. Please try again.');
     }
   };
 
@@ -91,10 +127,46 @@ export default function WorkspacePage() {
         </Link>
       </div>
 
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+          {error}
+        </div>
+      )}
+
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">{workspace.name}</h1>
+        {isEditingName ? (
+          <div className="flex gap-2 items-center">
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              className="text-3xl font-bold h-12"
+              placeholder="Enter workspace name"
+            />
+            <Button onClick={handleUpdateName} disabled={!newName.trim() || newName === workspace.name}>
+              Save
+            </Button>
+            <Button variant="outline" onClick={() => {
+              setIsEditingName(false);
+              setNewName(workspace.name);
+            }}>
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold">{workspace.name}</h1>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => setIsEditingName(true)}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
         {workspace.description && (
-          <p className="text-gray-600">{workspace.description}</p>
+          <p className="text-gray-600 mt-2">{workspace.description}</p>
         )}
       </div>
 
@@ -122,10 +194,22 @@ export default function WorkspacePage() {
             {projects.map((project) => (
               <Card key={project.id} className="hover:shadow-lg transition-shadow">
                 <CardHeader>
-                  <CardTitle>{project.name}</CardTitle>
-                  {project.description && (
-                    <CardDescription>{project.description}</CardDescription>
-                  )}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>{project.name}</CardTitle>
+                      {project.description && (
+                        <CardDescription>{project.description}</CardDescription>
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                      onClick={() => setEditingProject(project)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <Button 
@@ -146,6 +230,13 @@ export default function WorkspacePage() {
         open={isCreateProjectDialogOpen}
         onOpenChange={setIsCreateProjectDialogOpen}
         onSubmit={handleCreateProject}
+      />
+
+      <EditProjectDialog
+        open={editingProject !== null}
+        onOpenChange={(open) => !open && setEditingProject(null)}
+        project={editingProject}
+        onSubmit={handleUpdateProject}
       />
     </div>
   );

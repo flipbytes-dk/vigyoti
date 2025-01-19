@@ -1,153 +1,269 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import DashboardLayout from '@/components/dashboard/dashboard-layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { Play, ExternalLink } from 'lucide-react';
+import { WorkspaceClient } from '@/lib/workspace-client';
+import { Workspace, Project } from '@/types/workspace';
+import { UserSubscription, UserCredits } from '@/types/subscription';
+import DashboardLayout from '@/components/dashboard/dashboard-layout';
+import {
+  BarChart3,
+  Zap,
+  Users,
+  ArrowUpRight,
+  ArrowDownRight,
+  Sparkles,
+  Image as ImageIcon,
+  MessageSquare,
+  HardDrive
+} from 'lucide-react';
 
-const creditsMenu = [
-  { description: 'Generate tweets using any source (10 tweets)', credits: 10 },
-  { description: 'Generate 1 thread using any source (10 tweets)', credits: 10 },
-  { description: 'Generate 1 AI video using open AI SORA', credits: 20 },
-  { description: 'Generate 1 AI image', credits: 2 },
-  { description: 'Rewrite 1 AI tweet using GPT 4.0', credits: 1 },
-  { description: 'Storage 1 GB', credits: '2 per month' },
-];
-
-const subscriptionDetails = [
-  { description: 'Connected X accounts', available: 1, used: 1 },
-  { description: 'Monthly AI Credits', available: 100, used: 75 },
-  { description: 'Workspaces', available: 2, used: 1 },
-  { description: 'Team members', available: 5, used: 1 },
-];
+// We'll use a chart library like recharts
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell
+} from 'recharts';
 
 export default function DashboardPage() {
   const { data: session } = useSession();
+  const [subscription, setSubscription] = useState<UserSubscription | null>(null);
+  const [credits, setCredits] = useState<UserCredits | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  return (
-    <DashboardLayout>
-      <div className="space-y-8">
-        {/* Welcome Section */}
+  useEffect(() => {
+    const loadDashboardData = async () => {
+      if (session?.user?.id) {
+        try {
+          const [userSubscription, userCredits, userWorkspaces] = await Promise.all([
+            fetch('/api/user/subscription').then(res => res.json()),
+            fetch('/api/user/credits').then(res => res.json()),
+            WorkspaceClient.getWorkspaces()
+          ]);
+
+          setSubscription(userSubscription);
+          setCredits(userCredits);
+          setWorkspaces(userWorkspaces);
+
+          if (userWorkspaces.length > 0) {
+            const defaultWorkspace = userWorkspaces[0];
+            setSelectedWorkspace(defaultWorkspace);
+            const workspaceProjects = await WorkspaceClient.getWorkspaceProjects(defaultWorkspace.id);
+            setProjects(workspaceProjects);
+          }
+        } catch (error) {
+          console.error('Error loading dashboard data:', error);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadDashboardData();
+  }, [session?.user?.id]);
+
+  // Sample data for charts
+  const creditUsageData = [
+    { name: 'Tweets', value: 45 },
+    { name: 'Threads', value: 20 },
+    { name: 'AI Videos', value: 15 },
+    { name: 'AI Images', value: 20 }
+  ];
+
+  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
+
+  const activityData = [
+    { date: 'Mon', tweets: 4, threads: 2 },
+    { date: 'Tue', tweets: 3, threads: 1 },
+    { date: 'Wed', tweets: 7, threads: 3 },
+    { date: 'Thu', tweets: 5, threads: 2 },
+    { date: 'Fri', tweets: 6, threads: 4 },
+    { date: 'Sat', tweets: 2, threads: 1 },
+    { date: 'Sun', tweets: 3, threads: 2 }
+  ];
+
+  const dashboardContent = (
+    <div className="space-y-6">
+      {/* Welcome Section */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Welcome back, {session?.user?.name}!</h1>
+          <p className="text-gray-500">Here's what's happening with your workspaces.</p>
+        </div>
+        <Button>
+          <Sparkles className="mr-2 h-4 w-4" />
+          Generate New Content
+        </Button>
+      </div>
+
+      {/* Subscription & Credits Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
-          <CardContent className="p-6">
-            <div className="grid gap-6 md:grid-cols-2">
-              <div>
-                <h2 className="text-2xl font-bold mb-2">Welcome to Vigyoti X</h2>
-                <p className="text-gray-600 mb-4">
-                  Welcome to Vigyoti X, and thank you for signing up! We highly recommend
-                  watching this 2-minute video to learn how to make the most of the platform.
-                  You'll love the results!
-                </p>
-                <Button className="gap-2">
-                  <Play className="h-4 w-4" />
-                  Watch Tutorial
-                </Button>
-              </div>
-              <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center">
-                <Play className="h-12 w-12 text-gray-400" />
-              </div>
-            </div>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Subscription Plan</CardTitle>
+            <Zap className="h-4 w-4 text-blue-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold capitalize">{subscription?.plan || 'Free'}</div>
+            <p className="text-xs text-gray-500">
+              {subscription?.status === 'active' ? 'Active until ' : 'Expired'}
+              {subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : ''}
+            </p>
           </CardContent>
         </Card>
 
-        {/* Credits Menu */}
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-bold">Credits Menu</h2>
-            <Button variant="outline">See All Full Credits Menu</Button>
-          </div>
-          <Card>
-            <CardContent className="p-0">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-600">Description</th>
-                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-600">Credits Needed</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {creditsMenu.map((item, index) => (
-                    <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                      <td className="px-6 py-4 text-sm text-gray-600">{item.description}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600 text-right">{item.credits}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Available Credits</CardTitle>
+            <Sparkles className="h-4 w-4 text-green-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{credits ? credits.totalCredits - credits.usedCredits : 0}</div>
+            <Progress 
+              value={credits ? (credits.usedCredits / credits.totalCredits) * 100 : 0} 
+              className="mt-2"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {credits?.usedCredits} used of {credits?.totalCredits} total
+            </p>
+          </CardContent>
+        </Card>
 
-        {/* Subscription Section */}
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <h2 className="text-2xl font-bold">Your Subscription</h2>
-              <p className="text-sm text-gray-600">
-                Your current subscription is: <span className="text-blue-600 font-medium">Basic</span>
-              </p>
-            </div>
-            <Button>Upgrade</Button>
-          </div>
-          <Card>
-            <CardContent className="p-0">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-600">Description</th>
-                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-600">Available</th>
-                    <th className="px-6 py-3 text-right text-sm font-semibold text-gray-600">Used</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {subscriptionDetails.map((item, index) => (
-                    <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                      <td className="px-6 py-4 text-sm text-gray-600">{item.description}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600 text-right">{item.available}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600 text-right">{item.used}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Total Workspaces</CardTitle>
+            <Users className="h-4 w-4 text-purple-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{workspaces.length}</div>
+            <p className="text-xs text-gray-500">
+              {projects.length} active projects
+            </p>
+          </CardContent>
+        </Card>
 
-        {/* Events Section */}
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-bold">Events</h2>
-            <Button variant="outline">Register For Webinar</Button>
-          </div>
-          <Card>
-            <CardContent className="p-6">
-              <p className="text-gray-600">
-                Join our introductory webinar exploring the hints, tips and tricks within
-                Vigyoti. Every weekday 6PM GMT ✨
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* FAQ Section */}
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-bold">FAQ's</h2>
-            <Button variant="outline">See all FAQ's</Button>
-          </div>
-          <Card>
-            <CardContent className="p-6">
-              <h3 className="font-semibold mb-2">What are AI credits?</h3>
-              <p className="text-gray-600">
-                AI credits are used in Vigyoti whenever you regenerate content to rewrite or improve it, or if you
-                generate images using AI. Rewriting or improving a tweet costs 1 credit, while generating images costs
-                2 credits per image. To purchase AI credits, please visit the pricing page.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Storage Used</CardTitle>
+            <HardDrive className="h-4 w-4 text-orange-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">1.2 GB</div>
+            <Progress value={60} className="mt-2" />
+            <p className="text-xs text-gray-500 mt-1">
+              60% of 2GB limit
+            </p>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Credit Usage Distribution */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Credit Usage Distribution</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={creditUsageData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {creditUsageData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Weekly Activity</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activityData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="tweets" fill="#8884d8" name="Tweets" />
+                <Bar dataKey="threads" fill="#82ca9d" name="Threads" />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent Activity */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div className="flex items-center">
+              <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center">
+                <MessageSquare className="h-5 w-5 text-blue-600" />
+              </div>
+              <div className="ml-4 space-y-1">
+                <p className="text-sm font-medium">Generated 10 tweets</p>
+                <p className="text-xs text-gray-500">2 hours ago in Project X</p>
+              </div>
+              <div className="ml-auto font-medium">-10 credits</div>
+            </div>
+            <div className="flex items-center">
+              <div className="h-9 w-9 rounded-lg bg-green-100 flex items-center justify-center">
+                <ImageIcon className="h-5 w-5 text-green-600" />
+              </div>
+              <div className="ml-4 space-y-1">
+                <p className="text-sm font-medium">Generated AI image</p>
+                <p className="text-xs text-gray-500">5 hours ago in Project Y</p>
+              </div>
+              <div className="ml-auto font-medium">-2 credits</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return (
+    <DashboardLayout>
+      {dashboardContent}
     </DashboardLayout>
   );
 } 
