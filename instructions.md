@@ -1,4 +1,4 @@
-Below are **very detailed instructions** for building the **React/Next.js** application called `Vigyoti`. These instructions incorporate:
+Below are **very detailed instructions** for building the **React/Next.js** application called `Vigyoti`. These instructions incorporate the following:
 
 - The **original** project requirements for an AI-based tweet generation and scheduling tool.
 - Additional **implementation notes** regarding logging, project structure, server-side API calls, environment variables, error handling, **type safety**, **API client initialization**, **data fetching**, **Next.js configuration**, and **CORS** management.
