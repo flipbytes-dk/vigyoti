@@ -25,7 +25,8 @@ import {
   FileText,
   Send,
   Briefcase,
-  ChevronRight
+  ChevronRight,
+  FolderKanban
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -49,15 +50,6 @@ interface SidebarSection {
 }
 
 const sidebarSections = [
-  {
-    title: 'Content',
-    items: [
-      { title: 'My Projects', href: '/dashboard/projects', icon: Briefcase },
-      { title: 'Drafts', href: '/dashboard/drafts', icon: FileEdit },
-      { title: 'Scheduled', href: '/dashboard/scheduled', icon: Clock },
-      { title: 'Published', href: '/dashboard/published', icon: CheckCircle },
-    ],
-  },
   {
     title: 'Posts Scheduling',
     items: [
@@ -170,7 +162,7 @@ export default function DashboardLayout({
         <div className="flex items-center gap-4">
           <Link href="/dashboard">
             <Image
-              src="/vigyoti.png"
+              src="/vigyoti-logo-only.png"
               alt="Vigyoti Logo"
               width={120}
               height={32}
@@ -244,51 +236,51 @@ export default function DashboardLayout({
         )}>
           <div className="flex h-full flex-col gap-2 p-4">
             <div className="space-y-4">
-              {/* Quick Actions */}
-              <div className="space-y-2">
-                <Button className="w-full justify-start gap-2" variant="secondary">
-                  <Plus className="h-4 w-4" />
-                  Create a New Post
-                </Button>
-                <Button className="w-full justify-start gap-2" variant="outline">
-                  <Sparkles className="h-4 w-4" />
-                  Generate posts with AI
-                </Button>
+              <div className="px-3 py-2">
+                <Link href="/content/post">
+                  <Button variant="secondary" className="w-full justify-start">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create a New Post
+                  </Button>
+                </Link>
               </div>
-
-              {/* Current Project Selector */}
-              {selectedWorkspace && projects.length > 0 && (
-                <div className="space-y-2 border-b pb-4">
-                  <h3 className="px-2 text-xs font-semibold uppercase text-gray-500">
-                    Current Project
-                  </h3>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="w-full justify-between">
-                        <span className="truncate">{projects[0].name}</span>
-                        <ChevronDown className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56">
-                      {projects.map((project) => (
-                        <DropdownMenuItem 
-                          key={project.id}
-                          onClick={() => window.location.href = `/project/${project.id}`}
-                        >
-                          {project.name}
-                        </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem 
-                        onClick={() => window.location.href = `/workspace/${selectedWorkspace.id}`}
-                      >
-                        <Plus className="mr-2 h-4 w-4" />
-                        Create New Project
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+              <div className="px-3 py-2">
+                <h2 className="mb-2 px-4 text-lg font-semibold tracking-tight">
+                  Content
+                </h2>
+                <div className="space-y-1">
+                  <Link href="/content/create">
+                    <Button variant="ghost" className="w-full justify-start">
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      Create Content
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/projects">
+                    <Button variant="ghost" className="w-full justify-start">
+                      <FolderKanban className="mr-2 h-4 w-4" />
+                      My Projects
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/drafts">
+                    <Button variant="ghost" className="w-full justify-start">
+                      <FileText className="mr-2 h-4 w-4" />
+                      Drafts
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/scheduled">
+                    <Button variant="ghost" className="w-full justify-start">
+                      <Clock className="mr-2 h-4 w-4" />
+                      Scheduled
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard/published">
+                    <Button variant="ghost" className="w-full justify-start">
+                      <CheckCircle className="mr-2 h-4 w-4" />
+                      Published
+                    </Button>
+                  </Link>
                 </div>
-              )}
+              </div>
 
               {/* Navigation Sections */}
               {sidebarSections.map((section, index) => (

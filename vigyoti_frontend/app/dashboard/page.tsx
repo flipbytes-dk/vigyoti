@@ -35,7 +35,10 @@ import {
   Cell
 } from 'recharts';
 
+import { useRouter } from 'next/navigation';
+
 export default function DashboardPage() {
+  const router = useRouter();
   const { data: session } = useSession();
   const [subscription, setSubscription] = useState<UserSubscription | null>(null);
   const [credits, setCredits] = useState<UserCredits | null>(null);
@@ -103,9 +106,9 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold">Welcome back, {session?.user?.name}!</h1>
           <p className="text-gray-500">Here's what's happening with your workspaces.</p>
         </div>
-        <Button>
+        <Button onClick={() => router.push('/content/create')}>
           <Sparkles className="mr-2 h-4 w-4" />
-          Generate New Content
+          Generate Content with AI
         </Button>
       </div>
 

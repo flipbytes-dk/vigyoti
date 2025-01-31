@@ -1,11 +1,26 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { useSession, signIn } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 const plans = [
+  {
+    name: 'Free Trial',
+    price: {
+      monthly: '$0',
+      yearly: '$0',
+    },
+    features: [
+      'One workspace',
+      'Up to 10 posts per month',
+      '25 credits per month',
+      'Basic scheduling',
+      'Image and video support',
+    ],
+  },
   {
     name: 'Solo',
     price: {
@@ -68,8 +83,30 @@ const plans = [
 export default function PricingPage() {
   const { data: session } = useSession();
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
+  const router = useRouter();
 
-  const handleSubscribe = async (priceId: string) => {
+  const handleSubscribe = async (priceId?: string) => {
+    if (!session?.user) {
+      signIn();
+      return;
+    }
+
+    if (!priceId) {
+      // Free trial signup
+      try {
+        const response = await fetch('/api/auth/trial-signup', {
+          method: 'POST',
+        });
+        
+        if (response.ok) {
+          router.push('/dashboard');
+        }
+      } catch (error) {
+        console.error('Error starting trial:', error);
+      }
+      return;
+    }
+
     try {
       const response = await fetch('/api/stripe/create-checkout-session', {
         method: 'POST',

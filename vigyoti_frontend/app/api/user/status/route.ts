@@ -1,54 +1,48 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { SubscriptionService } from '@/lib/subscription-service';
-import { WorkspaceService } from '@/lib/workspace-service';
+import { adminAuth } from '../../../../lib/firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
+
+const db = getFirestore();
 
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session?.user?.id) {
+    if (!session?.user?.email) {
       return NextResponse.json({ status: 'unauthenticated' });
     }
 
-    // Check subscription status
-    const subscription = await SubscriptionService.getSubscription(session.user.id);
+    // Get Firebase user by email
+    const firebaseUser = await adminAuth.getUserByEmail(session.user.email);
+    const userId = firebaseUser.uid;
+
+    // Get user data from Firestore
+    const userDoc = await db.collection('users').doc(userId).get();
     
-    if (!subscription || subscription.status !== 'active') {
+    if (!userDoc.exists) {
       return NextResponse.json({ status: 'unsubscribed' });
     }
 
-    // Get or create default workspace
-    let workspaces = await WorkspaceService.getUserWorkspaces(session.user.id);
-    let defaultWorkspace;
+    const userData = userDoc.data();
+    const subscription = userData?.subscription;
 
-    if (workspaces.length === 0) {
-      // Create default workspace
-      const workspaceId = await WorkspaceService.createWorkspace({
-        name: session.user.name + "'s Workspace",
-        description: 'Default workspace',
-        ownerId: session.user.id,
-      });
-
-      // Create default project
-      await WorkspaceService.createProject({
-        name: 'My First Project',
-        description: 'Welcome to your first project!',
-        workspaceId,
-      });
-
-      defaultWorkspace = await WorkspaceService.getWorkspace(workspaceId);
-    } else {
-      defaultWorkspace = workspaces[0];
+    if (!subscription) {
+      return NextResponse.json({ status: 'unsubscribed' });
     }
 
-    return NextResponse.json({
-      status: 'active',
-      workspace: defaultWorkspace,
-    });
+    // Check if subscription is active
+    if (subscription.status === 'active') {
+      return NextResponse.json({ 
+        status: 'active',
+        plan: subscription.plan,
+        credits: userData?.credits
+      });
+    }
+
+    return NextResponse.json({ status: 'unsubscribed' });
   } catch (error) {
-    console.error('Error checking user status:', error);
+    console.error('Error in user status check:', error);
     return NextResponse.json({ status: 'error' }, { status: 500 });
   }
 } 
