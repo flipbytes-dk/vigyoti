@@ -1,23 +1,27 @@
 import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
-import { stripe } from '../../../../lib/stripe';
-import { FirebaseService } from '../../../../services/firebase';
+import { stripe } from '@/lib/stripe';
+import { FirebaseService } from '@/services/firebase';
 import { Timestamp } from 'firebase/firestore';
+import { PlanType, SubscriptionStatus } from '@/types/subscription';
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
 export async function POST(req: Request) {
   try {
-    const body = await req.text();
-    const signature = headers().get('stripe-signature')!;
+    const payload = await req.text();
+    const headersList = await headers();
+    const signature = headersList.get('stripe-signature');
 
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-    } catch (err) {
-      console.error('Webhook signature verification failed:', err);
-      return new NextResponse('Webhook Error', { status: 400 });
+    if (!signature) {
+      throw new Error('No stripe signature found');
     }
+
+    const event = stripe.webhooks.constructEvent(
+      payload,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET!
+    );
 
     const session = event.data.object as any;
 
@@ -35,15 +39,20 @@ export async function POST(req: Request) {
         // Get subscription details from Stripe
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const plan = subscription.items.data[0].price.nickname?.toLowerCase() || 'free';
+        const priceId = subscription.items.data[0].price.id;
 
         // Update user subscription and customer ID in Firestore
         await FirebaseService.updateUser(userId, {
           stripeCustomerId: customerId,
           subscription: {
-            plan: plan as 'free' | 'pro' | 'enterprise',
-            status: 'active',
-            startDate: Timestamp.fromMillis(subscription.current_period_start * 1000),
-            endDate: Timestamp.fromMillis(subscription.current_period_end * 1000),
+            plan: plan as PlanType,
+            status: subscription.status === 'active' ? 'active' : 'trial',
+            stripeSubscriptionId: subscription.id,
+            stripePriceId: priceId,
+            currentPeriodStart: Timestamp.fromMillis(subscription.current_period_start * 1000),
+            currentPeriodEnd: Timestamp.fromMillis(subscription.current_period_end * 1000),
+            cancelAtPeriodEnd: subscription.cancel_at_period_end,
+            updatedAt: Timestamp.now()
           },
         });
 
@@ -51,7 +60,7 @@ export async function POST(req: Request) {
           userId,
           customerId,
           plan,
-          status: 'active',
+          status: subscription.status,
         });
         break;
 
@@ -64,10 +73,14 @@ export async function POST(req: Request) {
           const updatedPlan = updatedSubscription.items.data[0].price.nickname?.toLowerCase() || 'free';
           await FirebaseService.updateUser(userData.id, {
             subscription: {
-              plan: updatedPlan as 'free' | 'pro' | 'enterprise',
-              status: updatedSubscription.status === 'active' ? 'active' : 'expired',
-              startDate: Timestamp.fromMillis(updatedSubscription.current_period_start * 1000),
-              endDate: Timestamp.fromMillis(updatedSubscription.current_period_end * 1000),
+              plan: updatedPlan as PlanType,
+              status: updatedSubscription.status === 'active' ? 'active' : 'past_due',
+              stripeSubscriptionId: updatedSubscription.id,
+              stripePriceId: updatedSubscription.items.data[0].price.id,
+              currentPeriodStart: Timestamp.fromMillis(updatedSubscription.current_period_start * 1000),
+              currentPeriodEnd: Timestamp.fromMillis(updatedSubscription.current_period_end * 1000),
+              cancelAtPeriodEnd: updatedSubscription.cancel_at_period_end,
+              updatedAt: Timestamp.now()
             },
           });
 
@@ -88,9 +101,13 @@ export async function POST(req: Request) {
           await FirebaseService.updateUser(deletedUserData.id, {
             subscription: {
               plan: 'free',
-              status: 'cancelled',
-              startDate: Timestamp.now(),
-              endDate: Timestamp.fromMillis(deletedSubscription.current_period_end * 1000),
+              status: 'canceled',
+              stripeSubscriptionId: deletedSubscription.id,
+              stripePriceId: deletedSubscription.items.data[0].price.id,
+              currentPeriodStart: Timestamp.now(),
+              currentPeriodEnd: Timestamp.fromMillis(deletedSubscription.current_period_end * 1000),
+              cancelAtPeriodEnd: deletedSubscription.cancel_at_period_end,
+              updatedAt: Timestamp.now()
             },
           });
 

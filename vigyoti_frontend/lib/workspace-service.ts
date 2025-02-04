@@ -1,15 +1,28 @@
-import { adminDb } from './firebase-admin';
+import { db as adminDb } from './firebase-admin';
 import { Workspace, Project } from '@/types/workspace';
+import type { Workspace as FirebaseWorkspace } from '@/types/firebase';
+import { Timestamp } from 'firebase-admin/firestore';
 
 export class WorkspaceService {
-  static async createWorkspace(workspace: Omit<Workspace, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> {
+  static async createWorkspace(userId: string, data: { name: string; description?: string }): Promise<Workspace> {
     try {
-      const workspaceRef = await adminDb.collection('workspaces').add({
-        ...workspace,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      return workspaceRef.id;
+      console.log('Creating workspace for user:', userId, data);
+      const workspaceRef = adminDb.collection('workspaces').doc();
+      const now = Timestamp.now();
+      
+      const workspace: Workspace = {
+        id: workspaceRef.id,
+        ownerId: userId,
+        name: data.name,
+        description: data.description || 'Default workspace',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      await workspaceRef.set(workspace);
+      console.log('Created workspace:', workspace);
+      
+      return workspace;
     } catch (error) {
       console.error('Error creating workspace:', error);
       throw error;
@@ -18,11 +31,21 @@ export class WorkspaceService {
 
   static async getWorkspace(workspaceId: string): Promise<Workspace | null> {
     try {
+      console.log('Fetching workspace:', workspaceId);
       const workspaceDoc = await adminDb.collection('workspaces').doc(workspaceId).get();
+      
       if (!workspaceDoc.exists) {
+        console.log('Workspace not found:', workspaceId);
         return null;
       }
-      return { id: workspaceDoc.id, ...workspaceDoc.data() } as Workspace;
+
+      const workspace = {
+        id: workspaceDoc.id,
+        ...workspaceDoc.data()
+      } as Workspace;
+
+      console.log('Found workspace:', workspace);
+      return workspace;
     } catch (error) {
       console.error('Error getting workspace:', error);
       throw error;
@@ -31,14 +54,18 @@ export class WorkspaceService {
 
   static async getUserWorkspaces(userId: string): Promise<Workspace[]> {
     try {
+      console.log('Fetching workspaces for user:', userId);
       const workspacesSnapshot = await adminDb.collection('workspaces')
         .where('ownerId', '==', userId)
         .get();
       
-      return workspacesSnapshot.docs.map(doc => ({
+      const workspaces = workspacesSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Workspace[];
+
+      console.log('Found workspaces:', workspaces);
+      return workspaces;
     } catch (error) {
       console.error('Error getting user workspaces:', error);
       throw error;

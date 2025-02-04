@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { stripe } from '../../../../lib/stripe';
+import { stripe } from '@/lib/stripe';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminAuth } from '../../../../lib/firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
-import { PLAN_CREDITS } from '../../../../types/subscription';
+import { adminAuth } from '@/lib/firebase-admin';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { PLAN_FEATURES } from '@/types/subscription';
 
 const db = getFirestore();
 
@@ -55,30 +55,7 @@ export async function POST(req: Request) {
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
     
-    if (!userDoc.exists) {
-      console.log('➕ Creating new user document...');
-      await userRef.set({
-        id: userId,
-        email: session.user.email,
-        name: session.user.name || '',
-        subscription: {
-          plan: planType,
-          status: 'active',
-          startDate: new Date(),
-          endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days trial
-        },
-        credits: {
-          total: PLAN_CREDITS[planType],
-          used: 0,
-          lastRefillDate: new Date(),
-        },
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      console.log('✅ User document created');
-    }
-
-    const userData = userDoc.exists ? userDoc.data() : await (await userRef.get()).data();
+    const userData = userDoc.exists ? userDoc.data() : null;
     let customerId = userData?.stripeCustomerId;
     console.log('✅ User data:', { customerId, userData });
 
@@ -98,7 +75,7 @@ export async function POST(req: Request) {
       console.log('📝 Updating user with Stripe customer ID...');
       await userRef.update({
         stripeCustomerId: customerId,
-        updatedAt: new Date(),
+        updatedAt: Timestamp.now(),
       });
       console.log('✅ User updated with Stripe customer ID');
     }

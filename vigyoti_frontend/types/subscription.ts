@@ -1,3 +1,5 @@
+import { Timestamp } from 'firebase/firestore';
+
 export type PlanType = 'free' | 'solo' | 'team' | 'agency';
 
 export type SubscriptionStatus = 'trial' | 'active' | 'canceled' | 'past_due' | 'unpaid';
@@ -10,10 +12,13 @@ export interface UserSubscription {
   subscriptionId?: string;
   plan: PlanType;
   status: SubscriptionStatus;
-  currentPeriodStart: number;
-  currentPeriodEnd: number;
-  cancelAtPeriodEnd: boolean;
-  trialEnd?: number;
+  currentPeriodStart: Timestamp;
+  currentPeriodEnd: Timestamp;
+  stripeSubscriptionId?: string;
+  stripePriceId?: string;
+  cancelAtPeriodEnd?: boolean;
+  trialEnd?: Timestamp;
+  updatedAt: Timestamp;
   usageThisMonth?: {
     posts: number;
     credits: number;
@@ -168,7 +173,7 @@ export const PLAN_POST_LIMITS = {
   free: 10,
   solo: Infinity,
   team: Infinity,
-  enterprise: Infinity,
+  agency: Infinity
 } as const;
 
 // Team member limits by plan

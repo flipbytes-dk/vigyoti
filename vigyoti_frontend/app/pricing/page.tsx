@@ -6,7 +6,20 @@ import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-const plans = [
+interface Plan {
+  name: string;
+  price: {
+    monthly: string;
+    yearly: string;
+  };
+  priceIds?: {
+    monthly?: string;
+    yearly?: string;
+  };
+  features: string[];
+}
+
+const plans: Plan[] = [
   {
     name: 'Free Trial',
     price: {
@@ -115,12 +128,20 @@ export default function PricingPage() {
         },
         body: JSON.stringify({
           priceId,
-          userId: session?.user?.id,
         }),
       });
 
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+
       const { url } = await response.json();
-      window.location.href = url;
+      if (url) {
+        window.location.href = url;
+      } else {
+        throw new Error('No checkout URL returned');
+      }
     } catch (error) {
       console.error('Error:', error);
     }
@@ -189,8 +210,8 @@ export default function PricingPage() {
               onClick={() =>
                 handleSubscribe(
                   billingInterval === 'monthly'
-                    ? plan.priceIds.monthly!
-                    : plan.priceIds.yearly!
+                    ? plan.priceIds?.monthly
+                    : plan.priceIds?.yearly
                 )
               }
             >

@@ -1,127 +1,201 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
-import { SubscriptionService } from '@/lib/subscription-service';
 import { adminAuth } from '@/lib/firebase-admin';
 import Stripe from 'stripe';
-import { SubscriptionStatus } from '@/types/subscription';
+import { PlanType, SubscriptionStatus, PLAN_FEATURES } from '@/types/subscription';
+import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 
-const getPlanFromPriceId = (priceId: string): 'solo' | 'team' | 'enterprise' => {
-  const priceMap: Record<string, 'solo' | 'team' | 'enterprise'> = {
+const db = getFirestore();
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+
+const getPlanFromPriceId = (priceId: string): PlanType => {
+  const priceMap: Record<string, PlanType> = {
     [process.env.STRIPE_SOLO_MONTHLY_PRICE_ID!]: 'solo',
     [process.env.STRIPE_SOLO_YEARLY_PRICE_ID!]: 'solo',
     [process.env.STRIPE_TEAM_MONTHLY_PRICE_ID!]: 'team',
     [process.env.STRIPE_TEAM_YEARLY_PRICE_ID!]: 'team',
-    [process.env.STRIPE_ENTERPRISE_MONTHLY_PRICE_ID!]: 'enterprise',
-    [process.env.STRIPE_ENTERPRISE_YEARLY_PRICE_ID!]: 'enterprise',
   };
-  return priceMap[priceId] || 'solo';
+  return priceMap[priceId] || 'free';
 };
 
-export async function POST(req: Request) {
-  const body = await req.text();
-  const signature = headers().get('Stripe-Signature') as string;
+// Handle subscription created or updated
+async function handleSubscriptionChange(subscription: Stripe.Subscription) {
+  console.log('🔄 Processing subscription change:', subscription.id);
+  
+  const customerId = subscription.customer as string;
+  const priceId = subscription.items.data[0].price.id;
+  const status = subscription.status;
+  
+  console.log('📝 Subscription details:', { customerId, priceId, status });
+  
+  // Get user by stripeCustomerId
+  const usersRef = db.collection('users');
+  const userSnapshot = await usersRef.where('stripeCustomerId', '==', customerId).get();
+  
+  if (userSnapshot.empty) {
+    console.error('❌ No user found with Stripe customer ID:', customerId);
+    return;
+  }
 
-  let event: Stripe.Event;
+  const userDoc = userSnapshot.docs[0];
+  const userData = userDoc.data();
+  const userId = userDoc.id;
+  
+  console.log('👤 Found user:', userId);
+
+  // Map price ID to plan type
+  const planMap: Record<string, PlanType> = {
+    [process.env.STRIPE_SOLO_MONTHLY_PRICE_ID!]: 'solo',
+    [process.env.STRIPE_SOLO_YEARLY_PRICE_ID!]: 'solo',
+    [process.env.STRIPE_TEAM_MONTHLY_PRICE_ID!]: 'team',
+    [process.env.STRIPE_TEAM_YEARLY_PRICE_ID!]: 'team',
+    [process.env.STRIPE_ENTERPRISE_MONTHLY_PRICE_ID!]: 'agency',
+    [process.env.STRIPE_ENTERPRISE_YEARLY_PRICE_ID!]: 'agency'
+  };
+
+  const plan = planMap[priceId] || 'free';
+  const now = Timestamp.now();
+
+  console.log('📋 Mapped plan:', plan);
 
   try {
-    event = stripe.webhooks.constructEvent(
-      body,
+    // Update user document with subscription info
+    const subscriptionData = {
+      subscription: {
+        plan,
+        status,
+        stripeSubscriptionId: subscription.id,
+        stripePriceId: priceId,
+        currentPeriodStart: Timestamp.fromMillis(subscription.current_period_start * 1000),
+        currentPeriodEnd: Timestamp.fromMillis(subscription.current_period_end * 1000),
+        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        updatedAt: now
+      },
+      credits: {
+        available: PLAN_FEATURES[plan].aiCreditsPerMonth,
+        total: PLAN_FEATURES[plan].aiCreditsPerMonth,
+        used: userData.credits?.used || 0,
+        lastRefill: now,
+        nextRefill: Timestamp.fromMillis(subscription.current_period_end * 1000),
+      },
+      updatedAt: now
+    };
+
+    await userDoc.ref.update(subscriptionData);
+    console.log('✅ Updated user subscription:', subscriptionData);
+
+    // Create default workspace if none exists
+    const workspacesSnapshot = await db.collection('workspaces')
+      .where('ownerId', '==', userId)
+      .get();
+
+    if (workspacesSnapshot.empty) {
+      console.log('📁 Creating default workspace for user');
+      const workspaceRef = db.collection('workspaces').doc();
+      await workspaceRef.set({
+        id: workspaceRef.id,
+        name: 'My Workspace',
+        description: 'Default workspace',
+        ownerId: userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // Add workspace to user's workspaces array
+      await userDoc.ref.update({
+        workspaces: [workspaceRef.id]
+      });
+      console.log('✅ Created default workspace:', workspaceRef.id);
+    }
+
+    // Update credits document
+    const creditsRef = db.collection('credits').doc(userId);
+    await creditsRef.set({
+      userId,
+      available: PLAN_FEATURES[plan].aiCreditsPerMonth,
+      total: PLAN_FEATURES[plan].aiCreditsPerMonth,
+      used: userData.credits?.used || 0,
+      lastRefillDate: now,
+      nextRefillDate: Timestamp.fromMillis(subscription.current_period_end * 1000),
+      canPurchaseCredits: PLAN_FEATURES[plan].canBuyCredits,
+      updatedAt: now,
+      usageBreakdown: userData.credits?.usageBreakdown || {
+        tweets: 0,
+        threads: 0,
+        videos: 0,
+        images: 0,
+        rewrites: 0,
+        storage: 0,
+      }
+    }, { merge: true });
+
+    console.log('✅ Updated credits document');
+  } catch (error) {
+    console.error('❌ Error updating subscription data:', error);
+    throw error;
+  }
+}
+
+// Handle the webhook event
+export async function POST(req: Request) {
+  try {
+    console.log('📥 Received webhook request');
+    const payload = await req.text();
+    const headersList = await headers();
+    const signature = headersList.get('stripe-signature');
+
+    if (!signature) {
+      console.error('❌ No stripe signature found');
+      return new Response('No signature', { status: 400 });
+    }
+
+    console.log('🔐 Verifying webhook signature');
+    const event = stripe.webhooks.constructEvent(
+      payload,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!
     );
-  } catch (error: any) {
-    console.error('Error verifying webhook signature:', error.message);
-    return new NextResponse(`Webhook Error: ${error.message}`, { status: 400 });
-  }
 
-  try {
+    console.log('📨 Processing webhook event:', event.type);
+
     switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        await handleSubscriptionChange(event.data.object as Stripe.Subscription);
+        break;
+      
+      case 'customer.subscription.deleted':
+        // Handle subscription deletion
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
         
-        if (session.mode === 'subscription' && session.subscription) {
-          const subscription = await stripe.subscriptions.retrieve(
-            session.subscription as string
-          );
-          
-          const userId = session.metadata?.userId;
-          const userEmail = session.metadata?.userEmail;
-
-          if (!userId || !userEmail) {
-            return new NextResponse('No user ID or email in session metadata', { status: 400 });
-          }
-
-          await SubscriptionService.createOrUpdateSubscription({
-            userId,
-            email: userEmail,
-            name: 'Unknown',
-            customerId: session.customer as string,
-            subscriptionId: session.subscription as string,
-            plan: getPlanFromPriceId(subscription.items.data[0].price.id),
-            status: subscription.status as SubscriptionStatus,
-            currentPeriodStart: subscription.current_period_start,
-            currentPeriodEnd: subscription.current_period_end,
-            cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        const userSnapshot = await db.collection('users')
+          .where('stripeCustomerId', '==', customerId)
+          .get();
+        
+        if (!userSnapshot.empty) {
+          const userDoc = userSnapshot.docs[0];
+          await userDoc.ref.update({
+            'subscription.status': 'canceled',
+            'subscription.updatedAt': Timestamp.now(),
           });
+          console.log('✅ Updated subscription status to canceled');
         }
         break;
-      }
-
-      case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customer = await stripe.customers.retrieve(subscription.customer as string);
-        if (!('email' in customer)) {
-          throw new Error('No email found for customer');
-        }
-
-        const userRecord = await adminAuth.getUserByEmail(customer.email!);
-        const priceId = subscription.items.data[0].price.id;
-        const plan = getPlanFromPriceId(priceId);
-        
-        await SubscriptionService.createOrUpdateSubscription({
-          userId: userRecord.uid,
-          email: userRecord.email!,
-          name: userRecord.displayName || 'Unknown',
-          customerId: subscription.customer as string,
-          subscriptionId: subscription.id,
-          plan,
-          status: subscription.status as any,
-          currentPeriodStart: subscription.current_period_start,
-          currentPeriodEnd: subscription.current_period_end,
-          cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        });
-        break;
-      }
-
-      case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customer = await stripe.customers.retrieve(subscription.customer as string);
-        if (!('email' in customer)) {
-          throw new Error('No email found for customer');
-        }
-
-        const userRecord = await adminAuth.getUserByEmail(customer.email!);
-        
-        await SubscriptionService.createOrUpdateSubscription({
-          userId: userRecord.uid,
-          email: userRecord.email!,
-          name: userRecord.displayName || 'Unknown',
-          customerId: subscription.customer as string,
-          subscriptionId: subscription.id,
-          plan: 'solo',
-          status: 'canceled',
-          currentPeriodStart: subscription.current_period_start,
-          currentPeriodEnd: subscription.current_period_end,
-          cancelAtPeriodEnd: true,
-        });
-        break;
-      }
     }
 
-    return new NextResponse(null, { status: 200 });
+    console.log('✅ Successfully processed webhook event');
+    return new Response(JSON.stringify({ received: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
   } catch (error) {
-    console.error('Error handling webhook:', error);
-    return new NextResponse('Webhook handler failed', { status: 500 });
+    console.error('❌ Error handling webhook:', error);
+    return new Response(
+      JSON.stringify({ error: 'Webhook handler failed' }), 
+      { status: 400 }
+    );
   }
 } 

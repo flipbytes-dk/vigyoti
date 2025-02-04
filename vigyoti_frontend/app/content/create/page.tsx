@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -54,9 +54,12 @@ import { db, storage } from "@/lib/firebase";
 import { v4 as uuidv4 } from 'uuid';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { EditProvider, useEdit } from "../../contexts/EditContext";
-import { Tweet, ImageGenerationOptions } from "../../types/tweet";
+import { Tweet, ImageGenerationOptions, TweetResponse } from "@/types/tweet";
 import { Timestamp } from "firebase/firestore";
-import { FirebaseService } from "@/services/firebase";
+import { FirebaseService, ContentGenerationRequest } from "@/services/firebase";
+import { getAuth } from "firebase/auth";
+import { User } from "firebase/auth";
+import { useSession } from 'next-auth/react';
 
 interface Session {
   user?: {
@@ -111,9 +114,6 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish }: TweetCardProps) => 
   };
 
   const wordCount = tweet.tweet_text.length;
-
-  // Debug log when tweet or image URL changes
-  console.log('TweetCard render:', { tweetId: tweet.id, imageUrl: tweet.image_url });
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors">
@@ -177,12 +177,12 @@ interface EditTweetModalProps {
   isOpen: boolean;
   onClose: () => void;
   tweet: Tweet;
-  videoSummary?: string;
-  onSave: (tweet: Tweet) => void;
-  onSchedule: () => void;
-  onPublish: () => void;
+  videoSummary: string;
+  onSave: (editedTweet: Tweet) => Promise<void>;
+  onSchedule?: () => void;
+  onPublish?: () => void;
   projectId: string;
-  setGeneratedTweets: React.Dispatch<React.SetStateAction<Tweet[]>>;
+  setGeneratedTweets?: React.Dispatch<React.SetStateAction<Tweet[]>>;
 }
 
 const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedule, onPublish, projectId, setGeneratedTweets }: EditTweetModalProps) => {
@@ -228,68 +228,6 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
     }
   };
 
-  const handleImageGenerate = async (options: ImageGenerationOptions) => {
-    try {
-      setIsGeneratingImage(true);
-      
-      // Get user session
-      const session = await getSession() as Session | null;
-      if (!session?.user?.id) {
-        throw new Error('User not authenticated');
-      }
-
-      const userId = session.user.id;
-
-      // Make the API request with the correct parameters
-      const response = await fetch(`${API_BASE_URL}/api/v1/content-sources/generate-image`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: imagePrompt || '',
-          negative_prompt: options.negative_prompt || '',
-          tweet_text: editedTweet.tweet_text,
-          summary: videoSummary || '',
-          aspect_ratio: options.aspect_ratio || "1:1",
-          style_type: options.style_type || "Auto",
-          magic_prompt_option: options.magic_prompt_option || "Auto"
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate image');
-      }
-
-      const data = await response.json();
-      
-      // Update the tweet with the generated image
-      if (data.image_url) {
-        setEditedTweet({
-          ...editedTweet,
-          image_url: data.image_url,
-          image_generation_details: {
-            prompt: imagePrompt,
-            tweet_text: editedTweet.tweet_text,
-            summary: videoSummary || '',
-            aspect_ratio: options.aspect_ratio,
-            style_type: options.style_type,
-            magic_prompt_option: options.magic_prompt_option
-          }
-        });
-      }
-
-      toast.success('Image generated successfully');
-    } catch (error) {
-      console.error('Error generating image:', error);
-      toast.error('Failed to generate image');
-    } finally {
-      setIsGeneratingImage(false);
-      setShowAddImage(false);
-    }
-  };
-
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl p-0 gap-0 bg-white">
@@ -306,135 +244,19 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
               <div className="flex items-start space-x-3">
                 <div className="h-12 w-12 rounded-full bg-gray-200 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center space-x-1">
-                      <span className="font-bold text-gray-900">Your Name</span>
-                      <span className="text-gray-500">@your_handle</span>
-                    </div>
-                    <span className={cn(
-                      "text-sm font-medium rounded-full px-3 py-1",
-                      wordCount > 240 ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-600"
-                    )}>
-                      {wordCount}/280
-                    </span>
+                  <div className="flex items-center space-x-1 mb-1">
+                    <span className="font-bold text-gray-900">Your Name</span>
+                    <span className="text-gray-500">@your_handle</span>
                   </div>
-                  <div>
-                    <Textarea
-                      value={editedTweet.tweet_text}
-                      onChange={(e) => setEditedTweet({ ...editedTweet, tweet_text: e.target.value })}
-                      className="min-h-[150px] text-xl bg-transparent border-none focus:ring-0 p-0 resize-none"
-                      placeholder="What's happening?"
-                    />
+                  <div className="text-gray-900 whitespace-pre-wrap text-xl">
+                    {editedTweet.tweet_text}
                   </div>
                   {editedTweet.image_url && (
-                    <div className="mt-4 space-y-4">
-                      <div className="rounded-xl overflow-hidden">
-                        <img src={editedTweet.image_url} alt="Tweet media" className="w-full h-auto" />
-                      </div>
-                      {editedTweet.image_generation_details && (
-                        <div className="space-y-2">
-                          <Label>Image Generation Prompt</Label>
-                          <Textarea
-                            value={imagePrompt}
-                            onChange={(e) => setImagePrompt(e.target.value)}
-                            className="min-h-[100px] text-sm"
-                            placeholder="Edit the image generation prompt..."
-                          />
-                          <p className="text-xs text-gray-500">
-                            Edit the prompt above to customize the image generation. The image will be generated without any text or writing.
-                          </p>
-                          <div className="flex justify-end">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setShowAddImage(true)}
-                              disabled={isGeneratingImage}
-                            >
-                              <Wand2 className="h-4 w-4 mr-2" />
-                              {isGeneratingImage ? 'Regenerating...' : 'Regenerate Image'}
-                            </Button>
-                          </div>
-                        </div>
-                      )}
+                    <div className="mt-4 rounded-xl overflow-hidden">
+                      <img src={editedTweet.image_url} alt="Tweet media" className="w-full h-auto" />
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="mt-6 space-y-3">
-              <div className="flex items-center gap-2">
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="text-red-600 hover:bg-red-50 flex-1"
-                  onClick={handleDelete}
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </Button>
-                <Button variant="outline" size="sm" className="hover:bg-gray-50 flex-1">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit Text
-                </Button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="hover:bg-blue-50 flex-1">
-                  <Wand2 className="h-4 w-4 mr-2" />
-                  AI Rewrite
-                </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="hover:bg-green-50 flex-1"
-                  onClick={() => setShowAddImage(true)}
-                  disabled={isGeneratingImage}
-                >
-                  <ImagePlus className="h-4 w-4 mr-2" />
-                  {isGeneratingImage ? 'Generating...' : 'Add Image'}
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Right side - Preview */}
-          <div className="border-l">
-            <div className="p-6">
-              <h3 className="font-semibold text-gray-900 mb-4">Preview</h3>
-              <div className="bg-white border border-gray-100 rounded-xl shadow-sm">
-                <div className="flex items-start space-x-3 p-4">
-                  <div className="h-12 w-12 rounded-full bg-gray-200 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center space-x-1 mb-1">
-                      <span className="font-bold text-gray-900">Your Name</span>
-                      <span className="text-gray-500">@your_handle</span>
-                    </div>
-                    <div className="text-gray-900 whitespace-pre-wrap text-xl">
-                      {editedTweet.tweet_text}
-                    </div>
-                    {editedTweet.image_url && (
-                      <div className="mt-4 rounded-xl overflow-hidden">
-                        <img src={editedTweet.image_url} alt="Tweet media" className="w-full h-auto" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="px-6 pb-6 space-y-3">
-              <Button variant="outline" onClick={handleSave} className="w-full hover:bg-blue-50">
-                Save Changes
-              </Button>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={onSchedule} className="hover:bg-purple-50 flex-1">
-                  Schedule
-                </Button>
-                <Button variant="default" onClick={onPublish} className="bg-blue-600 hover:bg-blue-700 flex-1">
-                  Publish
-                </Button>
               </div>
             </div>
           </div>
@@ -445,7 +267,7 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
           isOpen={showAddImage}
           onClose={() => setShowAddImage(false)}
           onUpload={handleImageUpload}
-          onGenerate={handleImageGenerate}
+          onGenerate={() => {}}
           defaultValues={editedTweet.image_generation_details}
         />
       </DialogContent>
@@ -459,10 +281,11 @@ interface AddImageDialogProps {
   onUpload: (file: File) => void;
   onGenerate: (options: ImageGenerationOptions) => void;
   defaultValues?: {
-    aspect_ratio: string;
-    style_type: string;
-    magic_prompt_option: string;
-  };
+    prompt?: string;
+    aspect_ratio?: string;
+    style_type?: string;
+    magic_prompt_option?: string;
+  } | null;
 }
 
 const AddImageDialog = ({ isOpen, onClose, onUpload, onGenerate, defaultValues }: AddImageDialogProps) => {
@@ -595,24 +418,24 @@ const AddImageDialog = ({ isOpen, onClose, onUpload, onGenerate, defaultValues }
   );
 };
 
-export default function CreateContentPage() {
+export default function CreateContent() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [currentStep, setCurrentStep] = useState(1);
+  const [selectedSource, setSelectedSource] = useState<string>('');
+  const [sourceUrl, setSourceUrl] = useState('');
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
-  const [currentStep, setCurrentStep] = useState(1);
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
-  const [sourceUrl, setSourceUrl] = useState('');
+  const [contentType, setContentType] = useState<'short' | 'long' | 'thread' | 'quote' | 'poll'>('short');
+  const [numberOfTweets, setNumberOfTweets] = useState(1);
   const [additionalContext, setAdditionalContext] = useState('');
-  const [contentType, setContentType] = useState('short');
-  const [numberOfTweets, setNumberOfTweets] = useState('1');
   const [isPremium, setIsPremium] = useState(false);
-  const { selectedWorkspace } = useWorkspace();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [generatedTweets, setGeneratedTweets] = useState<Tweet[]>([]);
-  const [videoSummary, setVideoSummary] = useState<string>('');
-  const [videoTranscript, setVideoTranscript] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
   const [editingTweet, setEditingTweet] = useState<Tweet | null>(null);
-  const [projectId, setProjectId] = useState<string>('');
+  const [tweets, setTweets] = useState<Tweet[]>([]);
+  const [projectId, setProjectId] = useState('');
+
+  const { data: session } = useSession();
+  const { selectedWorkspace } = useWorkspace();
 
   const steps = [
     {
@@ -671,115 +494,124 @@ export default function CreateContentPage() {
     },
   ];
 
-  const contentTypeOptions = [
-    { value: "short", label: "Short Tweet" },
-    { value: "long", label: "Long Tweet" },
-    { value: "thread", label: "Thread" },
-    { value: "poll", label: "Poll" },
-    { value: "quote", label: "Quote" }
-  ];
-
   const handleSourceSelect = (sourceId: string) => {
     setSelectedSource(sourceId);
     if (sourceId === 'image') {
-      handleImageGenerate({
-        prompt: '',
-        tweet_text: '',
-        summary: '',
-        aspect_ratio: '1:1',
-        style_type: 'Auto',
-        magic_prompt_option: 'Default'
-      });
+      setSourceUrl(''); // Reset source URL when switching to image
+      toast.info('Please upload an image in the next step');
     }
     setCurrentStep(2);
   };
 
   const handleBack = () => {
-    setSelectedSource(null);
+    setSelectedSource('');
     setCurrentStep(1);
     setSourceUrl('');
     setAdditionalContext('');
     setContentType('short');
-    setNumberOfTweets('1');
+    setNumberOfTweets(1);
     setIsPremium(false);
-    setVideoSummary('');
-    setVideoTranscript('');
-    setGeneratedTweets([]);
+    setTweets([]);
   };
 
   const isFormValid = () => {
     return projectName.trim() !== '' && 
            sourceUrl.trim() !== '' && 
-           contentType !== '' &&
-           (contentType === 'thread' ? parseInt(numberOfTweets) > 0 : true);
-  };
-
-  const handleContentTypeChange = (value: string) => {
-    setContentType(value);
+           ['short', 'long', 'thread', 'quote', 'poll'].includes(contentType) &&
+           numberOfTweets > 0;
   };
 
   const handleGenerateContent = async () => {
     try {
+      setIsLoading(true);
+      setError(null);
+
       const session = await getSession() as Session | null;
       if (!session?.user?.id) {
         toast.error('Please sign in to continue');
         return;
       }
 
-      // Check usage limits
-      const canGenerate = await FirebaseService.trackUsage(session.user.id, 'post', 1);
-      if (!canGenerate) {
-        toast.error('You have reached your monthly post limit. Please upgrade your plan.');
+      const auth = getAuth();
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        toast.error('Authentication failed');
         return;
       }
 
-      // Create or get project
-      let projectId = '';
+      const userId = session.user.id;
+      const workspaceId = selectedWorkspace?.id;
+
+      // Create project first
       if (!projectName) {
         toast.error('Please enter a project name');
         return;
       }
 
       const projectRef = doc(collection(db, 'projects'));
-      projectId = projectRef.id;
+      const newProjectId = projectRef.id;
 
       await setDoc(projectRef, {
-        id: projectId,
-        workspaceId: selectedWorkspace?.id,
-        userId: session.user.id,
+        id: newProjectId,
+        workspaceId,
+        userId,
         name: projectName,
         description: projectDescription,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
 
-      // Generate content and save tweets
-      // ... existing content generation code ...
+      setProjectId(newProjectId);
 
-      // Save generated tweets to the project
-      const tweetPromises = generatedTweets.map(tweet => 
-        FirebaseService.createTweet(projectId, session.user.id, tweet)
+      // Check if user has sufficient credits first
+      const hasCredits = await FirebaseService.checkUserCredits(userId);
+      if (!hasCredits) {
+        toast.error('Insufficient credits or you have reached your monthly post limit. Please upgrade your plan.');
+        return;
+      }
+
+      // Prepare content generation request
+      const contentRequest: ContentGenerationRequest = {
+        url: sourceUrl,
+        content_type: contentType,
+        num_tweets: numberOfTweets,
+        additional_context: additionalContext,
+        generate_image: false, // Set based on your UI
+        is_premium: isPremium,
+        project_id: newProjectId,
+        workspace_id: workspaceId || '',
+        user_id: userId
+      };
+
+      // Track usage and generate content
+      const success = await FirebaseService.trackUsage(
+        userId,
+        selectedSource, // 'youtube', 'blog', etc.
+        contentRequest,
+        token
       );
 
-      await Promise.all(tweetPromises);
-
-      // Track credit usage
-      await FirebaseService.trackUsage(session.user.id, 'credit', 10); // Assuming 10 credits per generation
+      if (!success) {
+        throw new Error('Failed to generate content. Please try again.');
+      }
 
       setCurrentStep(3);
+      toast.success('Content generated successfully!');
     } catch (error) {
       console.error('Error generating content:', error);
-      toast.error('Failed to generate content');
+      setError(error instanceof Error ? error.message : 'Failed to generate content');
+      toast.error(error instanceof Error ? error.message : 'Failed to generate content');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleEditTweet = (tweetToEdit: Tweet) => {
-    setEditingTweet(tweetToEdit);
+  const handleEditTweet = (tweet: Tweet) => {
+    setEditingTweet(tweet);
   };
 
   const handleSaveEdit = async (editedTweet: Tweet) => {
     try {
-      console.log('Starting save process...', editedTweet);
       setIsLoading(true);
       
       const session = await getSession();
@@ -791,89 +623,30 @@ export default function CreateContentPage() {
         throw new Error('No workspace selected');
       }
 
-      if (!projectId) {
-        throw new Error('No project ID available');
-      }
-
-      console.log('Saving tweet to Firestore...', {
-        projectId,
-        workspaceId: selectedWorkspace.id,
-        userId: session.user.id
-      });
-
       // Create a new tweet document in Firestore
       const tweetRef = doc(db, 'tweets', editedTweet.id || uuidv4());
       const tweetData = {
         id: tweetRef.id,
-        projectId: projectId,
+        projectId,
         workspaceId: selectedWorkspace.id,
         userId: session.user.id,
         tweet_text: editedTweet.tweet_text,
         is_thread: editedTweet.is_thread,
         thread_position: editedTweet.thread_position,
         image_url: editedTweet.image_url,
-        image_generation_details: editedTweet.image_generation_details || null,
+        image_generation_details: editedTweet.image_generation_details,
         is_premium_content: editedTweet.is_premium_content,
         status: 'draft',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
-      console.log('Tweet data to save:', tweetData);
-
-      // Save to Firestore
       await setDoc(tweetRef, tweetData);
-      console.log('Tweet saved to Firestore');
-
-      // If there's an image, save it to Storage
-      if (editedTweet.image_url?.startsWith('data:')) {
-        console.log('Saving image to Storage...');
-        try {
-          const imageBuffer = Buffer.from(editedTweet.image_url.split(',')[1], 'base64');
-          const imageRef = ref(storage, `users/${session.user.id}/workspaces/${selectedWorkspace.id}/projects/${projectId}/images/${tweetRef.id}.png`);
-          await uploadBytes(imageRef, imageBuffer);
-          
-          const imageUrl = await getDownloadURL(imageRef);
-          console.log('Image saved to Storage:', imageUrl);
-          
-          // Update the tweet with the storage URL
-          await updateDoc(tweetRef, {
-            image_url: imageUrl,
-          });
-          
-          // Create media document
-          const mediaRef = doc(db, 'media', uuidv4());
-          await setDoc(mediaRef, {
-            id: mediaRef.id,
-            projectId: projectId,
-            workspaceId: selectedWorkspace.id,
-            userId: session.user.id,
-            type: 'image',
-            url: imageUrl,
-            storageRef: imageRef.fullPath,
-            size: imageBuffer.length,
-            metadata: {
-              format: 'png'
-            },
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-
-          // Update the tweet in state with the new image URL
-          editedTweet.image_url = imageUrl;
-        } catch (error) {
-          console.error('Error saving image:', error);
-          toast.error('Failed to save image');
-        }
-      }
-
-      // Update the tweets state with the saved tweet
-      setGeneratedTweets(prev => 
-        prev.map(t => t.id === editedTweet.id ? editedTweet : t)
-      );
-
-      toast.success('Tweet saved successfully');
-      setEditingTweet(null); // Close the modal after saving
+      
+      setTweets(tweets.map(t => 
+        t.id === editedTweet.id ? editedTweet : t
+      ));
+      setEditingTweet(null);
     } catch (error) {
       console.error('Error saving tweet:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to save tweet');
@@ -882,100 +655,62 @@ export default function CreateContentPage() {
     }
   };
 
-  const handleScheduleTweet = () => {
-    // TODO: Implement schedule functionality
-    console.log('Schedule tweet');
-  };
-
-  const handlePublishTweet = () => {
-    // TODO: Implement publish functionality
-    console.log('Publish tweet');
-  };
-
   const renderSourceInput = () => {
     if (!selectedSource) return null;
 
-    if (currentStep === 3) {
-      return (
-        <div className="space-y-8">
-          {/* Video Summary and Transcript */}
-          {(videoSummary || videoTranscript) && (
-            <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 shadow-sm">
-              <h3 className="text-xl font-semibold text-gray-900 mb-4">Video Content Analysis</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <h4 className="font-medium text-gray-900 flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-blue-500" />
-                    Summary
-                  </h4>
-                  <div className="bg-white border border-gray-200 rounded-lg p-4 h-[200px] overflow-y-auto shadow-inner">
-                    <p className="text-gray-600 whitespace-pre-wrap leading-relaxed">{videoSummary}</p>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <h4 className="font-medium text-gray-900 flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-blue-500" />
-                    Transcript
-                  </h4>
-                  <div className="bg-white border border-gray-200 rounded-lg p-4 h-[200px] overflow-y-auto shadow-inner">
-                    <p className="text-gray-600 whitespace-pre-wrap leading-relaxed">{videoTranscript}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Separator */}
-          {generatedTweets.length > 0 && (
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                <div className="w-full border-t border-gray-200"></div>
-              </div>
-              <div className="relative flex justify-center">
-                <span className="bg-gray-50 px-3 text-gray-500 text-sm">Generated Content</span>
-              </div>
-            </div>
-          )}
-
-          {/* Generated Tweets Display */}
-          {generatedTweets.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-xl font-semibold text-gray-900">Generated Tweets</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {generatedTweets.map((tweet, index) => (
-                  <TweetCard 
-                    key={index} 
-                    tweet={tweet}
-                    onEdit={handleEditTweet}
-                    onSchedule={handleScheduleTweet}
-                    onPublish={handlePublishTweet}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      );
-    }
-
     return (
-      <div className="space-y-6">
+      <div className="space-y-8">
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={handleBack} className="p-2">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <h3 className="text-lg font-semibold">Enter Source Details</h3>
         </div>
+        
+        <div className="space-y-8">
+          {/* Project Details */}
+          <div className="space-y-6">
+            <div>
+              <Label htmlFor="projectName" className="text-base flex items-center gap-1 mb-3">
+                Project Name
+                <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="projectName"
+                placeholder="Enter a name for your project (e.g., Product Launch Campaign)"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                className={cn(
+                  "bg-white border-gray-300 focus:border-blue-500",
+                  !projectName.trim() && "border-red-300 focus:border-red-500"
+                )}
+              />
+              {!projectName.trim() && (
+                <p className="text-sm text-red-500 mt-1">Project name is required</p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="projectDescription" className="text-base mb-3 block">Project Description</Label>
+              <Textarea
+                id="projectDescription"
+                placeholder="Describe your project's goals and content strategy"
+                value={projectDescription}
+                onChange={(e) => setProjectDescription(e.target.value)}
+                rows={3}
+                className="bg-white border-gray-300 focus:border-blue-500"
+              />
+            </div>
+          </div>
 
-        <div className="space-y-6">
+          {/* Source URL */}
           <div>
-            <Label htmlFor="url" className="flex items-center gap-1 mb-2">
-              YouTube URL
+            <Label htmlFor="url" className="text-base flex items-center gap-1 mb-3">
+              Source URL
               <span className="text-red-500">*</span>
             </Label>
             <Input
               id="url"
-              placeholder="Enter YouTube video URL"
+              placeholder="Enter source URL"
               value={sourceUrl}
               onChange={(e) => setSourceUrl(e.target.value)}
               className={cn(
@@ -989,8 +724,56 @@ export default function CreateContentPage() {
             )}
           </div>
 
+          {/* Content Type and Number of Tweets */}
+          <div className="grid grid-cols-2 gap-8">
+            <div>
+              <Label htmlFor="contentType" className="text-base flex items-center gap-1 mb-3">
+                Content Type
+                <span className="text-red-500">*</span>
+              </Label>
+              <Select 
+                value={contentType}
+                onValueChange={(value) => setContentType(value as 'short' | 'long' | 'thread' | 'quote' | 'poll')}
+              >
+                <SelectTrigger id="contentType" className="bg-white">
+                  <SelectValue placeholder="Select content type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="short">Short Tweet</SelectItem>
+                  <SelectItem value="long">Long Tweet</SelectItem>
+                  <SelectItem value="thread">Thread</SelectItem>
+                  <SelectItem value="quote">Quote Tweet</SelectItem>
+                  <SelectItem value="poll">Poll</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="numberOfTweets" className="text-base flex items-center gap-1 mb-3">
+                Number of Tweets
+                <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="numberOfTweets"
+                type="number"
+                min={1}
+                max={10}
+                value={numberOfTweets}
+                onChange={(e) => setNumberOfTweets(parseInt(e.target.value))}
+                className={cn(
+                  "bg-white border-gray-300 focus:border-blue-500",
+                  numberOfTweets < 1 && "border-red-300 focus:border-red-500"
+                )}
+              />
+              <p className="text-sm text-gray-500 mt-1">
+                Number of tweets to generate (1-10)
+              </p>
+            </div>
+          </div>
+
+          {/* Additional Context */}
           <div>
-            <Label htmlFor="additionalContext" className="mb-2">Additional Context (Optional)</Label>
+            <Label htmlFor="additionalContext" className="text-base mb-3 block">Additional Context (Optional)</Label>
             <Textarea
               id="additionalContext"
               placeholder="Add any specific instructions or context for content generation..."
@@ -999,76 +782,47 @@ export default function CreateContentPage() {
               rows={4}
               className="bg-white border-gray-300 focus:border-blue-500"
             />
-            <p className="text-sm text-gray-500 mt-1">Provide any additional instructions to guide the content generation</p>
+            <p className="text-sm text-gray-500 mt-1">
+              Provide any additional instructions to guide the content generation
+            </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <Label htmlFor="contentType" className="flex items-center gap-1">
-                Content Type
-                <span className="text-red-500">*</span>
-              </Label>
-              <Select 
-                value={contentType} 
-                onValueChange={handleContentTypeChange}
-              >
-                <SelectTrigger id="contentType" className="bg-white">
-                  <SelectValue placeholder="Select content type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {contentTypeOptions.map(option => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-sm text-gray-500">Choose how you want your content to be formatted</p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="numberOfTweets" className="flex items-center gap-1">
-                Number of Tweets
-                <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="numberOfTweets"
-                type="number"
-                min="1"
-                max="10"
-                value={numberOfTweets}
-                onChange={(e) => setNumberOfTweets(e.target.value)}
-                className={cn(
-                  "bg-white border-gray-300 focus:border-blue-500",
-                  !numberOfTweets && "border-red-300 focus:border-red-500"
-                )}
-                required
-              />
-              <p className="text-sm text-gray-500">
-                Number of tweets to generate (1-10)
-              </p>
-            </div>
-          </div>
-
-          {contentType === 'long' && (
-            <div className="flex items-center space-x-2">
+          {/* Premium Mode Toggle */}
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label htmlFor="premium-mode" className="text-base font-medium">Premium Mode</Label>
+                <p className="text-sm text-gray-600">Enable advanced features and longer content generation</p>
+              </div>
               <Switch
                 id="premium-mode"
                 checked={isPremium}
                 onCheckedChange={setIsPremium}
               />
-              <Label htmlFor="premium-mode">Enable Premium Mode</Label>
-              <p className="text-sm text-gray-500 ml-2">(Allows longer content generation)</p>
             </div>
-          )}
+          </div>
 
-          <div className="flex justify-end">
+          {/* Generate Button */}
+          <div className="flex justify-end pt-4">
             <Button 
-              onClick={handleGenerateContent} 
-              className="gap-2"
+              onClick={handleGenerateContent}
               disabled={isLoading || !isFormValid()}
+              className="gap-2 min-w-[200px]"
             >
-              {isLoading ? 'Generating...' : 'Generate Content'}
+              {isLoading ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-5 w-5" />
+                  Generate Content
+                </>
+              )}
             </Button>
           </div>
         </div>
@@ -1076,119 +830,192 @@ export default function CreateContentPage() {
     );
   };
 
-  const content = (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Create Content with AI</h1>
-          <p className="text-gray-500">Transform your content into engaging social media posts in three simple steps.</p>
-        </div>
-        <Link href="/dashboard" className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-          <Home className="h-6 w-6 text-gray-600" />
-        </Link>
-      </div>
-
-      {/* Project Details Section */}
-      <div className="space-y-4">
-        <div>
-          <Label htmlFor="projectName">Project Name</Label>
-          <Input
-            id="projectName"
-            placeholder="Enter a name for your project (e.g., Product Launch Campaign)"
-            value={projectName}
-            onChange={(e) => setProjectName(e.target.value)}
-            className="bg-white border-gray-300 focus:border-blue-500"
-          />
-        </div>
-        <div>
-          <Label htmlFor="projectDescription">Project Description</Label>
-          <Textarea
-            id="projectDescription"
-            placeholder="Describe your project's goals and content strategy"
-            value={projectDescription}
-            onChange={(e) => setProjectDescription(e.target.value)}
-            rows={3}
-            className="bg-white border-gray-300 focus:border-blue-500"
-          />
-        </div>
-      </div>
-
-      {/* Steps Section */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {steps.map((step) => (
-          <Card
-            key={step.number}
-            className={cn(
-              "p-6 transition-all duration-200 hover:shadow-md border-gray-200",
-              currentStep === step.number
-                ? "ring-2 ring-blue-500 shadow-lg bg-blue-50"
-                : currentStep > step.number
-                ? "bg-gray-50"
-                : "bg-white shadow-sm hover:border-blue-200"
-            )}
-          >
-            <div className="space-y-2">
-              <div className={cn(
-                "text-sm font-medium",
-                currentStep === step.number ? "text-blue-600" : "text-gray-500"
-              )}>
-                Step {step.number}
-              </div>
-              <h3 className="text-lg font-semibold">{step.title}</h3>
-              <p className="text-sm text-gray-500">{step.description}</p>
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* Content Source Selection or Source Input */}
-      {selectedSource ? (
-        renderSourceInput()
-      ) : (
-        <div>
-          <h3 className="text-lg font-semibold mb-4">Select Content Source</h3>
-          <p className="text-gray-500 mb-6">Choose the type of content you want to convert to Twitter posts</p>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {contentSources.map((source) => (
-              <button
-                key={source.id}
-                onClick={() => handleSourceSelect(source.id)}
-                className="flex flex-col p-4 border rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left bg-white shadow-sm hover:shadow-md"
-              >
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 rounded-lg bg-blue-50">
-                    <source.icon className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <h4 className="font-medium">{source.title}</h4>
-                </div>
-                <p className="text-sm text-gray-500">{source.description}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <DashboardLayout>
-      <EditProvider editingTweet={editingTweet} videoSummary={videoSummary}>
-        {content}
+      <div className="container mx-auto px-4 py-8">
+        <div className="space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">Create Content with AI</h1>
+              <p className="text-gray-500">Transform your content into engaging social media posts in three simple steps.</p>
+            </div>
+            <Link href="/dashboard" className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+              <Home className="h-6 w-6 text-gray-600" />
+            </Link>
+          </div>
+
+          {/* Steps */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {steps.map((step) => (
+              <Card
+                key={step.number}
+                className={cn(
+                  "p-6 transition-all duration-200 hover:shadow-md border-gray-200",
+                  currentStep === step.number
+                    ? "ring-2 ring-blue-500 shadow-lg bg-blue-50"
+                    : currentStep > step.number
+                    ? "bg-gray-50"
+                    : "bg-white shadow-sm hover:border-blue-200"
+                )}
+              >
+                <div className="space-y-2">
+                  <div className={cn(
+                    "text-sm font-medium",
+                    currentStep === step.number ? "text-blue-600" : "text-gray-500"
+                  )}>
+                    Step {step.number}
+                  </div>
+                  <h3 className="text-lg font-semibold">{step.title}</h3>
+                  <p className="text-sm text-gray-500">{step.description}</p>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Content Source Selection or Source Input */}
+          {currentStep === 1 ? (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">Select Content Source</h3>
+              <p className="text-gray-500 mb-6">Choose the type of content you want to convert to Twitter posts</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {contentSources.map((source) => (
+                  <button
+                    key={source.id}
+                    onClick={() => handleSourceSelect(source.id)}
+                    className="flex flex-col p-4 border rounded-lg hover:border-blue-500 hover:bg-blue-50 transition-colors text-left bg-white shadow-sm hover:shadow-md"
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="p-2 rounded-lg bg-blue-50">
+                        <source.icon className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <h4 className="font-medium">{source.title}</h4>
+                    </div>
+                    <p className="text-sm text-gray-500">{source.description}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            renderSourceInput()
+          )}
+
+          {/* Generated Tweets Display */}
+          {tweets.length > 0 && currentStep === 3 && (
+            <div className="mt-8">
+              <h2 className="text-xl font-bold text-gray-900 mb-4">Generated Tweets</h2>
+              <div className="space-y-4">
+                {tweets.map((tweet) => (
+                  <div
+                    key={tweet.id}
+                    className="bg-white shadow-sm rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
+                  >
+                    <div className="p-6">
+                      {/* Tweet Header */}
+                      <div className="flex items-center space-x-3 mb-4">
+                        <div className="h-10 w-10 rounded-full bg-gray-200" />
+                        <div>
+                          <div className="font-medium text-gray-900">Your Name</div>
+                          <div className="text-sm text-gray-500">@your_handle</div>
+                        </div>
+                      </div>
+
+                      {/* Tweet Content */}
+                      <div className="text-gray-900 text-lg">{tweet.tweet_text}</div>
+
+                      {/* Tweet Image */}
+                      {tweet.image_url && (
+                        <div className="mt-4 rounded-lg overflow-hidden border border-gray-200">
+                          <img
+                            src={tweet.image_url}
+                            alt="Tweet media"
+                            className="w-full h-auto"
+                          />
+                        </div>
+                      )}
+
+                      {/* Tweet Metadata */}
+                      <div className="mt-4 flex items-center space-x-4 text-sm text-gray-500">
+                        <div className="flex items-center">
+                          {tweet.is_thread ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                              Thread {tweet.thread_position}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                              Single Tweet
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center">
+                          {tweet.is_premium_content ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                              Premium
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                              Free
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                            {tweet.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Tweet Actions */}
+                      <div className="mt-4 flex items-center space-x-4 border-t pt-4">
+                        <button
+                          onClick={() => handleEditTweet(tweet)}
+                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                          <Edit className="h-4 w-4 mr-1.5" />
+                          Edit
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Error Display */}
+          {error && (
+            <div className="rounded-md bg-red-50 p-4 mt-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-red-800">Error</h3>
+                  <div className="mt-2 text-sm text-red-700">
+                    <p>{error}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Edit Tweet Modal */}
         {editingTweet && (
           <EditTweetModal
             isOpen={!!editingTweet}
             onClose={() => setEditingTweet(null)}
             tweet={editingTweet}
-            videoSummary={videoSummary}
+            videoSummary={''}
             onSave={handleSaveEdit}
-            onSchedule={handleScheduleTweet}
-            onPublish={handlePublishTweet}
-            projectId={projectId}
-            setGeneratedTweets={setGeneratedTweets}
+            projectId={projectName}
+            setGeneratedTweets={setTweets}
           />
         )}
-      </EditProvider>
+      </div>
     </DashboardLayout>
   );
 } 

@@ -3,24 +3,39 @@ import { Timestamp } from 'firebase/firestore';
 export interface FirebaseUser {
   id: string;
   email: string;
-  name: string;
+  name?: string;
+  avatar?: string;
   currentWorkspaceId?: string;
   stripeCustomerId?: string;
-  subscription: {
-    plan: 'free' | 'pro' | 'enterprise';
-    status: 'active' | 'cancelled' | 'expired';
+  subscription?: {
+    plan: 'free' | 'solo' | 'team' | 'agency';
+    status: 'trial' | 'active' | 'canceled' | 'past_due';
     startDate: Timestamp;
     endDate: Timestamp;
+    trialEnd?: Timestamp;
   };
+  usage?: {
+    postsThisMonth: number;
+    creditsThisMonth: number;
+    storageUsed: number;
+  };
+  credits: {
+    available: number;
+    used: number;
+    total: number;
+    lastRefill: Timestamp;
+    nextRefill: Timestamp;
+  };
+  workspaces: string[]; // Array of workspace IDs
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
 
 export interface Workspace {
   id: string;
-  userId: string;
+  ownerId: string;
   name: string;
-  isDefault: boolean;
+  description?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -31,9 +46,9 @@ export interface Project {
   userId: string;
   name: string;
   description?: string;
-  sourceType: 'youtube' | 'blog' | 'audio' | 'image' | 'document' | 'custom';
+  sourceType?: string;
   sourceUrl?: string;
-  status: 'draft' | 'active' | 'archived';
+  status: 'draft' | 'scheduled' | 'published';
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -57,7 +72,7 @@ export interface Tweet {
   id: string;
   projectId: string;
   userId: string;
-  contentId: string;
+  contentId?: string;
   text: string;
   isThread: boolean;
   threadPosition?: number;
@@ -65,12 +80,7 @@ export interface Tweet {
   scheduledFor?: Timestamp;
   publishedAt?: Timestamp;
   imageUrl?: string;
-  imageMetadata?: {
-    prompt: string;
-    aspectRatio: string;
-    styleType: string;
-    storageRef: string;
-  };
+  imageMetadata?: any;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 } 
