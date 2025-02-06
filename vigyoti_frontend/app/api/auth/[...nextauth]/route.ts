@@ -90,6 +90,18 @@ async function signInCallback({ user, account }: {
           photoURL: user.image || undefined,
         });
         user.id = firebaseUser.uid;
+
+        // Create minimal Firestore document for new user
+        const userRef = db.collection('users').doc(firebaseUser.uid);
+        await userRef.set({
+          id: firebaseUser.uid,
+          email: user.email,
+          name: user.name || '',
+          workspaces: [], // Empty workspaces array
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+        });
+        console.log('Created minimal Firestore document for user:', firebaseUser.uid);
       } else {
         throw error; // Re-throw other errors
       }

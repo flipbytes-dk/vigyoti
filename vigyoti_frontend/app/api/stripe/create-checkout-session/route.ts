@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { adminAuth } from '@/lib/firebase-admin';
+import { auth } from '@/lib/firebase-admin';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { PLAN_FEATURES } from '@/types/subscription';
 
@@ -33,7 +33,7 @@ export async function POST(req: Request) {
 
     // Get Firebase user ID from email
     console.log('🔍 Getting Firebase user...');
-    const firebaseUser = await adminAuth.getUserByEmail(session.user.email);
+    const firebaseUser = await auth.getUserByEmail(session.user.email);
     const userId = firebaseUser.uid;
     console.log('✅ Firebase user found:', { userId });
 
@@ -71,13 +71,43 @@ export async function POST(req: Request) {
       customerId = customer.id;
       console.log('✅ Stripe customer created:', { customerId });
 
-      // Update user with Stripe customer ID using Admin SDK
-      console.log('📝 Updating user with Stripe customer ID...');
-      await userRef.update({
-        stripeCustomerId: customerId,
-        updatedAt: Timestamp.now(),
-      });
-      console.log('✅ User updated with Stripe customer ID');
+      // Create or update user document
+      console.log('📝 Creating/Updating user document...');
+      if (!userDoc.exists) {
+        await userRef.set({
+          id: userId,
+          email: session.user.email,
+          stripeCustomerId: customerId,
+          subscription: {
+            plan: 'free',
+            status: 'trial',
+            startDate: Timestamp.now(),
+            endDate: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)), // 14 days trial
+            trialEnd: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
+          },
+          usage: {
+            postsThisMonth: 0,
+            creditsThisMonth: 0,
+            storageUsed: 0
+          },
+          credits: {
+            available: 100,
+            used: 0,
+            total: 100,
+            lastRefill: Timestamp.now(),
+            nextRefill: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+          },
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+        });
+        console.log('✅ User document created');
+      } else {
+        await userRef.update({
+          stripeCustomerId: customerId,
+          updatedAt: Timestamp.now(),
+        });
+        console.log('✅ User document updated');
+      }
     }
 
     console.log('🛍️ Creating Stripe checkout session...');

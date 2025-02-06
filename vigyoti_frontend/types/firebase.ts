@@ -81,6 +81,7 @@ export interface Tweet {
   publishedAt?: Timestamp;
   imageUrl?: string;
   imageMetadata?: any;
+  isPremiumContent?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 } 

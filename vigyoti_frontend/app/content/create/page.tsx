@@ -54,12 +54,22 @@ import { db, storage } from "@/lib/firebase";
 import { v4 as uuidv4 } from 'uuid';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { EditProvider, useEdit } from "../../contexts/EditContext";
-import { Tweet, ImageGenerationOptions, TweetResponse } from "@/types/tweet";
+import { Tweet, Workspace } from '@/types/firebase';
 import { Timestamp } from "firebase/firestore";
 import { FirebaseService, ContentGenerationRequest } from "@/services/firebase";
 import { getAuth } from "firebase/auth";
 import { User } from "firebase/auth";
 import { useSession } from 'next-auth/react';
+
+interface ImageGenerationOptions {
+  prompt: string;
+  text: string;
+  summary: string;
+  aspect_ratio: '1:1' | '9:16' | '16:9';
+  style_type: 'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime';
+  magic_prompt_option: string;
+  negative_prompt?: string;
+}
 
 interface Session {
   user?: {
@@ -77,25 +87,21 @@ interface Session {
   };
 }
 
-interface ContentGenerationResponse {
-  video_title?: string;
-  video_summary?: string;
-  full_transcript?: string;
-  generated_tweets: Array<{
-    tweet_text: string;
-    is_thread: boolean;
-    thread_position?: number;
-    image_url?: string;
-    is_premium_content: boolean;
-  }>;
-  metadata: Record<string, any>;
-  cost_info: {
-    input_tokens: number;
-    output_tokens: number;
-    input_cost: number;
-    output_cost: number;
-    total_cost: number;
+interface GeneratedTweet {
+  tweet_text: string;
+  is_thread: boolean;
+  thread_position?: number;
+  image_url?: string;
+  image_generation_details?: {
+    prompt?: string;
+    aspect_ratio?: string;
+    style_type?: string;
+    magic_prompt_option?: string;
   };
+}
+
+interface ContentGenerationResponse {
+  generated_tweets: GeneratedTweet[];
 }
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
@@ -109,11 +115,12 @@ interface TweetCardProps {
 
 const TweetCard = ({ tweet, onEdit, onSchedule, onPublish }: TweetCardProps) => {
   const handleCopy = () => {
-    navigator.clipboard.writeText(tweet.tweet_text);
+    navigator.clipboard.writeText(tweet.text);
     toast.success('Tweet copied to clipboard');
   };
 
-  const wordCount = tweet.tweet_text.length;
+  const wordCount = tweet.text.length;
+  const createdAt = tweet.createdAt instanceof Timestamp ? tweet.createdAt.toDate() : new Date();
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors">
@@ -125,7 +132,7 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish }: TweetCardProps) => 
               <span className="font-bold text-gray-900">Your Name</span>
               <span className="text-gray-500">@your_handle</span>
               <span className="text-gray-500">·</span>
-              <span className="text-gray-500">{formatDistanceToNow(new Date())}</span>
+              <span className="text-gray-500">{formatDistanceToNow(createdAt)}</span>
             </div>
             <span className={cn(
               "text-sm font-medium rounded-full px-2 py-1",
@@ -134,16 +141,16 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish }: TweetCardProps) => 
               {wordCount}/280
             </span>
           </div>
-          <div className="mt-2 text-gray-900 whitespace-pre-wrap">{tweet.tweet_text}</div>
-          {tweet.image_url && (
+          <div className="mt-2 text-gray-900 whitespace-pre-wrap">{tweet.text}</div>
+          {tweet.imageUrl && (
             <div className="mt-3 rounded-xl overflow-hidden">
               <img 
-                src={tweet.image_url} 
+                src={tweet.imageUrl} 
                 alt="Tweet media" 
                 className="w-full h-auto object-cover"
-                onLoad={() => console.log('Image loaded successfully:', tweet.image_url)}
+                onLoad={() => console.log('Image loaded successfully:', tweet.imageUrl)}
                 onError={(e) => {
-                  console.error('Image failed to load:', tweet.image_url);
+                  console.error('Image failed to load:', tweet.imageUrl);
                   e.currentTarget.style.display = 'none';
                 }}
               />
@@ -187,15 +194,23 @@ interface EditTweetModalProps {
 
 const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedule, onPublish, projectId, setGeneratedTweets }: EditTweetModalProps) => {
   const [editedTweet, setEditedTweet] = useState<Tweet>({
-    ...tweet,
     id: tweet.id || uuidv4(),
-    is_thread: tweet.is_thread || false,
-    is_premium_content: tweet.is_premium_content || false,
+    projectId: tweet.projectId,
+    userId: tweet.userId,
+    contentId: tweet.contentId || '',
+    text: tweet.text,
+    isThread: tweet.isThread || false,
+    threadPosition: tweet.threadPosition,
+    status: tweet.status || 'draft',
+    imageUrl: tweet.imageUrl,
+    imageMetadata: tweet.imageMetadata,
+    createdAt: tweet.createdAt || Timestamp.now(),
+    updatedAt: tweet.updatedAt || Timestamp.now()
   });
   const [showAddImage, setShowAddImage] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [imagePrompt, setImagePrompt] = useState(tweet.image_generation_details?.prompt || '');
-  const wordCount = editedTweet.tweet_text.length;
+  const [imagePrompt, setImagePrompt] = useState(tweet.imageGenerationDetails?.prompt || '');
+  const wordCount = editedTweet.text.length;
 
   const handleSave = async () => {
     try {
@@ -211,20 +226,93 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
   const handleDelete = () => {
     if (window.confirm('Are you sure you want to delete this tweet?')) {
       onClose();
-      // Notify parent about deletion
-      onSave({ ...editedTweet, deleted: true });
+      // Mark as deleted by updating status
+      onSave({ ...editedTweet, status: 'draft' });
     }
   };
 
-  const handleImageUpload = async (file: File) => {
+  const handleImageUpload = async (file: File, tweet: Tweet) => {
     try {
-      // Here you would typically upload to your image storage service
-      // For now, we'll create a local URL
-      const imageUrl = URL.createObjectURL(file);
-      setEditedTweet({ ...editedTweet, image_url: imageUrl });
+      // Check file size (2MB limit per image)
+      const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB in bytes
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error('Image size must be less than 2MB');
+        return null;
+      }
+
+      // Check user's storage usage
+      const session = await getSession() as Session | null;
+      if (!session?.user?.id) {
+        toast.error('Please sign in to upload images');
+        return null;
+      }
+
+      const userDoc = await getDoc(doc(db, 'users', session.user.id));
+      const userData = userDoc.data() as FirebaseUser;
+      const currentStorageUsed = userData.usage?.storageUsed || 0;
+      const storageLimit = 2; // 2GB limit
+
+      if (currentStorageUsed >= storageLimit) {
+        toast.error('Storage limit reached. Please delete some images or upgrade your plan.');
+        return null;
+      }
+
+      // Calculate new storage usage
+      const newStorageUsed = currentStorageUsed + (file.size / (1024 * 1024 * 1024)); // Convert bytes to GB
+
+      if (newStorageUsed > storageLimit) {
+        toast.error('This upload would exceed your storage limit');
+        return null;
+      }
+
+      // Create storage reference with metadata
+      const timestamp = Date.now();
+      const imagePath = `users/${session.user.id}/projects/${tweet.projectId}/tweets/${tweet.id}/images/${timestamp}_${file.name}`;
+      const imageRef = ref(storage, imagePath);
+
+      // Add metadata
+      const metadata = {
+        contentType: file.type,
+        customMetadata: {
+          userId: session.user.id,
+          projectId: tweet.projectId,
+          tweetId: tweet.id,
+          uploadType: 'user_upload',
+          originalName: file.name
+        }
+      };
+
+      // Upload file
+      await uploadBytes(imageRef, file, metadata);
+      const imageUrl = await getDownloadURL(imageRef);
+
+      // Update user's storage usage
+      await updateDoc(doc(db, 'users', session.user.id), {
+        'usage.storageUsed': newStorageUsed,
+        updatedAt: serverTimestamp()
+      });
+
+      return imageUrl;
     } catch (error) {
       console.error('Error uploading image:', error);
       toast.error('Failed to upload image');
+      return null;
+    }
+  };
+
+  const handleImageUploadInModal = async (file: File) => {
+    const imageUrl = await handleImageUpload(file, editedTweet);
+    if (imageUrl) {
+      setEditedTweet(prev => ({
+        ...prev,
+        imageUrl,
+        imageMetadata: {
+          ...prev.imageMetadata,
+          uploadType: 'user_upload',
+          originalName: file.name,
+          uploadedAt: Timestamp.now()
+        }
+      }));
     }
   };
 
@@ -249,11 +337,11 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
                     <span className="text-gray-500">@your_handle</span>
                   </div>
                   <div className="text-gray-900 whitespace-pre-wrap text-xl">
-                    {editedTweet.tweet_text}
+                    {editedTweet.text}
                   </div>
-                  {editedTweet.image_url && (
+                  {editedTweet.imageUrl && (
                     <div className="mt-4 rounded-xl overflow-hidden">
-                      <img src={editedTweet.image_url} alt="Tweet media" className="w-full h-auto" />
+                      <img src={editedTweet.imageUrl} alt="Tweet media" className="w-full h-auto" />
                     </div>
                   )}
                 </div>
@@ -266,9 +354,9 @@ const EditTweetModal = ({ isOpen, onClose, tweet, videoSummary, onSave, onSchedu
         <AddImageDialog
           isOpen={showAddImage}
           onClose={() => setShowAddImage(false)}
-          onUpload={handleImageUpload}
+          onUpload={handleImageUploadInModal}
           onGenerate={() => {}}
-          defaultValues={editedTweet.image_generation_details}
+          defaultValues={editedTweet.imageMetadata}
         />
       </DialogContent>
     </Dialog>
@@ -395,8 +483,8 @@ const AddImageDialog = ({ isOpen, onClose, onUpload, onGenerate, defaultValues }
 
               <Button onClick={() => {
                 onGenerate({
-                  prompt: '',  // The backend will generate this from tweet_text and summary
-                  tweet_text: editingTweet?.tweet_text || '',
+                  prompt: '',
+                  text: editingTweet?.text || '',
                   summary: videoSummary || '',
                   aspect_ratio: aspectRatio,
                   style_type: style,
@@ -420,6 +508,7 @@ const AddImageDialog = ({ isOpen, onClose, onUpload, onGenerate, defaultValues }
 
 export default function CreateContent() {
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [selectedSource, setSelectedSource] = useState<string>('');
   const [sourceUrl, setSourceUrl] = useState('');
@@ -433,9 +522,11 @@ export default function CreateContent() {
   const [editingTweet, setEditingTweet] = useState<Tweet | null>(null);
   const [tweets, setTweets] = useState<Tweet[]>([]);
   const [projectId, setProjectId] = useState('');
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
 
-  const { data: session } = useSession();
-  const { selectedWorkspace } = useWorkspace();
+  const { data: sessionData } = useSession();
+  const { selectedWorkspace: workspaceData } = useWorkspace();
 
   const steps = [
     {
@@ -521,6 +612,76 @@ export default function CreateContent() {
            numberOfTweets > 0;
   };
 
+  const handleImageGeneration = async (options: ImageGenerationOptions) => {
+    try {
+      setIsGeneratingImage(true);
+      const response = await fetch(`${API_BASE_URL}/api/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: options.prompt,
+          summary: options.summary,
+          aspect_ratio: options.aspect_ratio,
+          style_type: options.style_type,
+          magic_prompt_option: options.magic_prompt_option,
+          negative_prompt: options.negative_prompt
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to generate image');
+      
+      const data = await response.json();
+      return data.imageUrl || undefined;
+    } catch (error) {
+      console.error('Error generating image:', error);
+      toast.error('Failed to generate image');
+      return undefined;
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const convertGeneratedTweetToFirebaseTweet = (
+    tweet: GeneratedTweet,
+    projectId: string,
+    userId: string,
+    isPremium: boolean
+  ): Tweet => {
+    const now = Timestamp.now();
+    
+    // Create the tweet object without optional fields first
+    const tweetData: Tweet = {
+      id: uuidv4(),
+      projectId,
+      userId,
+      text: tweet.tweet_text,
+      isThread: tweet.is_thread || false,
+      status: 'draft',
+      isPremiumContent: isPremium,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    // Add optional fields only if they have values
+    if (tweet.thread_position !== undefined) {
+      tweetData.threadPosition = tweet.thread_position;
+    }
+
+    if (tweet.image_url) {
+      tweetData.imageUrl = tweet.image_url;
+    }
+
+    if (tweet.image_generation_details) {
+      tweetData.imageMetadata = {
+        ...tweet.image_generation_details,
+        generatedAt: now,
+        type: 'ai_generated'
+      };
+    }
+
+    return tweetData;
+  };
+
   const handleGenerateContent = async () => {
     try {
       setIsLoading(true);
@@ -540,7 +701,7 @@ export default function CreateContent() {
       }
 
       const userId = session.user.id;
-      const workspaceId = selectedWorkspace?.id;
+      const workspaceId = workspaceData?.id;
 
       // Create project first
       if (!projectName) {
@@ -563,13 +724,6 @@ export default function CreateContent() {
 
       setProjectId(newProjectId);
 
-      // Check if user has sufficient credits first
-      const hasCredits = await FirebaseService.checkUserCredits(userId);
-      if (!hasCredits) {
-        toast.error('Insufficient credits or you have reached your monthly post limit. Please upgrade your plan.');
-        return;
-      }
-
       // Prepare content generation request
       const contentRequest: ContentGenerationRequest = {
         url: sourceUrl,
@@ -583,18 +737,86 @@ export default function CreateContent() {
         user_id: userId
       };
 
-      // Track usage and generate content
-      const success = await FirebaseService.trackUsage(
+      // Track usage first
+      const usageTracked = await FirebaseService.trackUsage(
         userId,
-        selectedSource, // 'youtube', 'blog', etc.
+        selectedSource,
         contentRequest,
         token
       );
 
-      if (!success) {
-        throw new Error('Failed to generate content. Please try again.');
+      if (!usageTracked) {
+        throw new Error('Failed to track usage. Please check your credits and try again.');
       }
 
+      // Get the appropriate endpoint
+      const endpoint = FirebaseService.getEndpointForContentType(selectedSource);
+      
+      // Prepare request body
+      let requestBody: any;
+      let headers: HeadersInit = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      };
+
+      // For file uploads (audio, image, document)
+      if (contentRequest.file) {
+        const formData = new FormData();
+        formData.append('file', contentRequest.file);
+        formData.append('content_type', contentRequest.content_type);
+        formData.append('num_tweets', contentRequest.num_tweets.toString());
+        if (contentRequest.additional_context) {
+          formData.append('additional_context', contentRequest.additional_context);
+        }
+        formData.append('generate_image', contentRequest.generate_image.toString());
+        formData.append('is_premium', contentRequest.is_premium.toString());
+        requestBody = formData;
+        delete headers['Content-Type'];
+      } else {
+        requestBody = JSON.stringify(contentRequest);
+      }
+
+      // Make the API call to generate content
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/content-sources/${endpoint}`,
+        {
+          method: 'POST',
+          headers,
+          body: requestBody
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to generate content: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Generated tweets response:', data);
+      const generatedTweets = data.generated_tweets || [];
+
+      // Convert generated tweets to Firebase Tweet format
+      const firebaseTweets = generatedTweets.map(tweet => 
+        convertGeneratedTweetToFirebaseTweet(
+          tweet,
+          newProjectId,
+          userId,
+          isPremium
+        )
+      );
+
+      // Store tweets in Firestore
+      if (firebaseTweets.length > 0) {
+        const tweetIds = await FirebaseService.storeGeneratedTweets(
+          newProjectId,
+          userId,
+          firebaseTweets
+        );
+        console.log('✅ Stored tweets with IDs:', tweetIds);
+      }
+
+      // Set tweets in state
+      setTweets(firebaseTweets);
       setCurrentStep(3);
       toast.success('Content generated successfully!');
     } catch (error) {
@@ -606,53 +828,36 @@ export default function CreateContent() {
     }
   };
 
-  const handleEditTweet = (tweet: Tweet) => {
-    setEditingTweet(tweet);
+  const handleEditTweet = async (tweet: Tweet) => {
+    try {
+      if (!workspaceData) return;
+      
+      // Ensure we're using the Firebase Tweet interface properties
+      const updatedTweet: Tweet = {
+        ...tweet,
+        updatedAt: Timestamp.now()
+      };
+      
+      await FirebaseService.updateTweet(workspaceData.id, tweet.id, updatedTweet);
+      toast.success('Tweet updated successfully');
+      
+      // Refresh tweets list
+      const updatedTweets = await FirebaseService.getProjectTweets(workspaceData.id);
+      setTweets(updatedTweets);
+    } catch (error) {
+      console.error('Error updating tweet:', error);
+      toast.error('Failed to update tweet');
+    }
   };
 
-  const handleSaveEdit = async (editedTweet: Tweet) => {
-    try {
-      setIsLoading(true);
-      
-      const session = await getSession();
-      if (!session?.user?.id) {
-        throw new Error('User not authenticated');
-      }
-      
-      if (!selectedWorkspace?.id) {
-        throw new Error('No workspace selected');
-      }
+  const handleScheduleTweet = (tweet: Tweet) => {
+    // Implement scheduling logic
+    console.log('Schedule tweet:', tweet);
+  };
 
-      // Create a new tweet document in Firestore
-      const tweetRef = doc(db, 'tweets', editedTweet.id || uuidv4());
-      const tweetData = {
-        id: tweetRef.id,
-        projectId,
-        workspaceId: selectedWorkspace.id,
-        userId: session.user.id,
-        tweet_text: editedTweet.tweet_text,
-        is_thread: editedTweet.is_thread,
-        thread_position: editedTweet.thread_position,
-        image_url: editedTweet.image_url,
-        image_generation_details: editedTweet.image_generation_details,
-        is_premium_content: editedTweet.is_premium_content,
-        status: 'draft',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-
-      await setDoc(tweetRef, tweetData);
-      
-      setTweets(tweets.map(t => 
-        t.id === editedTweet.id ? editedTweet : t
-      ));
-      setEditingTweet(null);
-    } catch (error) {
-      console.error('Error saving tweet:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to save tweet');
-    } finally {
-      setIsLoading(false);
-    }
+  const handlePublishTweet = (tweet: Tweet) => {
+    // Implement publishing logic
+    console.log('Publish tweet:', tweet);
   };
 
   const renderSourceInput = () => {
@@ -901,83 +1106,19 @@ export default function CreateContent() {
             renderSourceInput()
           )}
 
-          {/* Generated Tweets Display */}
-          {tweets.length > 0 && currentStep === 3 && (
-            <div className="mt-8">
-              <h2 className="text-xl font-bold text-gray-900 mb-4">Generated Tweets</h2>
+          {/* Step 3: Review Generated Content */}
+          {currentStep === 3 && (
+            <div className="mt-8 space-y-6">
+              <h2 className="text-2xl font-bold">Review Generated Content</h2>
               <div className="space-y-4">
                 {tweets.map((tweet) => (
-                  <div
+                  <TweetCard
                     key={tweet.id}
-                    className="bg-white shadow-sm rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
-                  >
-                    <div className="p-6">
-                      {/* Tweet Header */}
-                      <div className="flex items-center space-x-3 mb-4">
-                        <div className="h-10 w-10 rounded-full bg-gray-200" />
-                        <div>
-                          <div className="font-medium text-gray-900">Your Name</div>
-                          <div className="text-sm text-gray-500">@your_handle</div>
-                        </div>
-                      </div>
-
-                      {/* Tweet Content */}
-                      <div className="text-gray-900 text-lg">{tweet.tweet_text}</div>
-
-                      {/* Tweet Image */}
-                      {tweet.image_url && (
-                        <div className="mt-4 rounded-lg overflow-hidden border border-gray-200">
-                          <img
-                            src={tweet.image_url}
-                            alt="Tweet media"
-                            className="w-full h-auto"
-                          />
-                        </div>
-                      )}
-
-                      {/* Tweet Metadata */}
-                      <div className="mt-4 flex items-center space-x-4 text-sm text-gray-500">
-                        <div className="flex items-center">
-                          {tweet.is_thread ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              Thread {tweet.thread_position}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                              Single Tweet
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center">
-                          {tweet.is_premium_content ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                              Premium
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                              Free
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            {tweet.status}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Tweet Actions */}
-                      <div className="mt-4 flex items-center space-x-4 border-t pt-4">
-                        <button
-                          onClick={() => handleEditTweet(tweet)}
-                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        >
-                          <Edit className="h-4 w-4 mr-1.5" />
-                          Edit
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    tweet={tweet}
+                    onEdit={handleEditTweet}
+                    onSchedule={() => handleScheduleTweet(tweet)}
+                    onPublish={() => handlePublishTweet(tweet)}
+                  />
                 ))}
               </div>
             </div>
@@ -1010,7 +1151,7 @@ export default function CreateContent() {
             onClose={() => setEditingTweet(null)}
             tweet={editingTweet}
             videoSummary={''}
-            onSave={handleSaveEdit}
+            onSave={handleEditTweet}
             projectId={projectName}
             setGeneratedTweets={setTweets}
           />

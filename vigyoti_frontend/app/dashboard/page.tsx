@@ -36,6 +36,7 @@ import {
 } from 'recharts';
 
 import { useRouter } from 'next/navigation';
+import { Timestamp } from 'firebase/firestore';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -98,12 +99,34 @@ export default function DashboardPage() {
     { date: 'Sun', tweets: 3, threads: 2 }
   ];
 
+  // Helper function to safely calculate percentage
+  const calculatePercentage = (used: number, total: number) => {
+    if (!total || !used) return 0;
+    const percentage = (used / total) * 100;
+    return isNaN(percentage) ? 0 : percentage;
+  };
+
+  // Helper function to safely display numbers
+  const formatNumber = (num: number | undefined | null) => {
+    if (num === undefined || num === null || isNaN(num)) return 0;
+    return num;
+  };
+
+  // Helper function to safely format dates
+  const formatDate = (timestamp: number | Timestamp | undefined | null) => {
+    if (!timestamp) return '';
+    if (timestamp instanceof Timestamp) {
+      return timestamp.toDate().toLocaleDateString();
+    }
+    return new Date(timestamp).toLocaleDateString();
+  };
+
   const dashboardContent = (
     <div className="space-y-6">
       {/* Welcome Section */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Welcome back, {session?.user?.name}!</h1>
+          <h1 className="text-3xl font-bold">Welcome back, {session?.user?.name || 'User'}!</h1>
           <p className="text-gray-500">Here's what's happening with your workspaces.</p>
         </div>
         <Button onClick={() => router.push('/content/create')}>
@@ -123,7 +146,7 @@ export default function DashboardPage() {
             <div className="text-2xl font-bold capitalize">{subscription?.plan || 'Free'}</div>
             <p className="text-xs text-gray-500">
               {subscription?.status === 'active' ? 'Active until ' : 'Expired'}
-              {subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleDateString() : ''}
+              {formatDate(subscription?.currentPeriodEnd)}
             </p>
           </CardContent>
         </Card>
@@ -134,13 +157,18 @@ export default function DashboardPage() {
             <Sparkles className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{credits ? credits.totalCredits - credits.usedCredits : 0}</div>
+            <div className="text-2xl font-bold">
+              {formatNumber(credits ? credits.totalCredits - credits.usedCredits : 0)}
+            </div>
             <Progress 
-              value={credits ? (credits.usedCredits / credits.totalCredits) * 100 : 0} 
+              value={calculatePercentage(
+                credits?.usedCredits || 0,
+                credits?.totalCredits || 1
+              )} 
               className="mt-2"
             />
             <p className="text-xs text-gray-500 mt-1">
-              {credits?.usedCredits} used of {credits?.totalCredits} total
+              {formatNumber(credits?.usedCredits)} used of {formatNumber(credits?.totalCredits)} total
             </p>
           </CardContent>
         </Card>
@@ -151,9 +179,9 @@ export default function DashboardPage() {
             <Users className="h-4 w-4 text-purple-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{workspaces.length}</div>
+            <div className="text-2xl font-bold">{formatNumber(workspaces.length)}</div>
             <p className="text-xs text-gray-500">
-              {projects.length} active projects
+              {formatNumber(projects.length)} active projects
             </p>
           </CardContent>
         </Card>
@@ -164,10 +192,21 @@ export default function DashboardPage() {
             <HardDrive className="h-4 w-4 text-orange-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">1.2 GB</div>
-            <Progress value={60} className="mt-2" />
+            <div className="text-2xl font-bold">
+              {formatNumber(subscription?.usageThisMonth?.storage || 0)} GB
+            </div>
+            <Progress 
+              value={calculatePercentage(
+                subscription?.usageThisMonth?.storage || 0,
+                2 // Total storage limit
+              )} 
+              className="mt-2" 
+            />
             <p className="text-xs text-gray-500 mt-1">
-              60% of 2GB limit
+              {calculatePercentage(
+                subscription?.usageThisMonth?.storage || 0,
+                2
+              ).toFixed(0)}% of 2GB limit
             </p>
           </CardContent>
         </Card>

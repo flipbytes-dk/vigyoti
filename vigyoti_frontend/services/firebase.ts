@@ -11,12 +11,15 @@ import {
   Timestamp,
   increment,
   runTransaction,
-  deleteDoc
+  deleteDoc,
+  arrayUnion,
+  DocumentData,
+  QueryDocumentSnapshot
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
-import type { FirebaseUser, Project, Content, Tweet } from '../types/firebase';
-import { PLAN_POST_LIMITS } from '../types/subscription';
+import type { FirebaseUser, Project, Content, Tweet, Workspace } from '../types/firebase';
+import { PLAN_POST_LIMITS, PLAN_FEATURES } from '../types/subscription';
 import { getAuth, onAuthStateChanged, User as FirebaseAuthUser } from 'firebase/auth';
 
 export interface ContentGenerationRequest {
@@ -224,71 +227,105 @@ export class FirebaseService {
     });
   }
 
-  static async createProject(userId: string, workspaceId: string, data: { name: string; description?: string; sourceType?: string; sourceUrl?: string }) {
+  static async createWorkspace(userId: string, name: string, description?: string): Promise<string> {
     try {
-      console.log('🚀 Starting project creation:', { userId, workspaceId, data });
+      // Check if workspace name already exists for this user
+      const workspacesRef = collection(db, 'workspaces');
+      const existingWorkspacesQuery = query(
+        workspacesRef,
+        where('ownerId', '==', userId)
+      );
+      const existingWorkspaces = await getDocs(existingWorkspacesQuery);
 
-      // Initialize auth
-      const auth = getAuth();
-      console.log('🔐 Initial auth state:', {
-        currentUser: auth.currentUser?.uid,
-        requestedUserId: userId,
-        isInitialized: auth.currentUser !== undefined
-      });
-
-      // Wait for auth to be ready
-      const user = await FirebaseService.waitForAuth();
-      console.log('👤 Auth state ready:', { 
-        isAuthenticated: !!user,
-        currentUserId: user.uid,
-        requestedUserId: userId,
-        match: user.uid === userId
-      });
-
-      // Verify workspace exists
-      const workspaceRef = doc(db, 'workspaces', workspaceId);
-      const workspaceSnap = await getDoc(workspaceRef);
-      
-      if (!workspaceSnap.exists()) {
-        console.error('🚨 Workspace not found:', workspaceId);
-        throw new Error('Workspace not found');
+      // Check name uniqueness
+      const nameExists = existingWorkspaces.docs.some((doc: QueryDocumentSnapshot<DocumentData>) => 
+        doc.data().name.toLowerCase() === name.toLowerCase()
+      );
+      if (nameExists) {
+        throw new Error('A workspace with this name already exists');
       }
 
-      console.log('✅ Workspace verified:', { 
-        workspaceId,
-        exists: workspaceSnap.exists()
-      });
+      // Get user's subscription plan
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      const userData = userDoc.data() as FirebaseUser;
+      const plan = userData.subscription?.plan || 'free';
 
-      // Create project document
-      const projectRef = doc(collection(db, 'projects'));
-      const projectData = {
-        id: projectRef.id,
-        workspaceId,
-        userId: user.uid, // Use the authenticated user's ID
-        name: data.name,
-        description: data.description || '',
-        sourceType: data.sourceType || 'custom',
-        sourceUrl: data.sourceUrl || '',
-        status: 'draft',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+      // Check workspace limit
+      if (existingWorkspaces.size >= PLAN_FEATURES[plan].maxWorkspaces) {
+        throw new Error(`You have reached the maximum number of workspaces allowed in your ${plan} plan`);
+      }
+
+      // Create workspace with unique name
+      const workspaceRef = doc(workspacesRef);
+      const workspaceData: Workspace = {
+        id: workspaceRef.id,
+        ownerId: userId,
+        name: name,
+        description: description || `Workspace created on ${new Date().toLocaleDateString()}`,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       };
 
-      console.log('📝 Project data to write:', projectData);
+      await setDoc(workspaceRef, workspaceData);
+
+      // Update user's workspaces array
+      const userRef = doc(db, 'users', userId);
+      await updateDoc(userRef, {
+        workspaces: arrayUnion(workspaceRef.id),
+        currentWorkspaceId: workspaceRef.id,
+        updatedAt: serverTimestamp(),
+      });
+
+      return workspaceRef.id;
+    } catch (error) {
+      console.error('Error creating workspace:', error);
+      throw error;
+    }
+  }
+
+  static async createProject(userId: string, workspaceId: string, data: { 
+    name: string; 
+    description?: string; 
+    sourceType?: string; 
+    sourceUrl?: string 
+  }): Promise<string> {
+    try {
+      // Check if project name already exists in this workspace
+      const projectsRef = collection(db, 'projects');
+      const existingProjectsQuery = query(
+        projectsRef,
+        where('workspaceId', '==', workspaceId),
+        where('userId', '==', userId)
+      );
+      const existingProjects = await getDocs(existingProjectsQuery);
+
+      // Check name uniqueness
+      const nameExists = existingProjects.docs.some((doc: QueryDocumentSnapshot<DocumentData>) => 
+        doc.data().name.toLowerCase() === data.name.toLowerCase()
+      );
+      if (nameExists) {
+        throw new Error('A project with this name already exists in this workspace');
+      }
+
+      // Create project with unique name
+      const projectRef = doc(projectsRef);
+      const projectData: Project = {
+        id: projectRef.id,
+        workspaceId,
+        userId,
+        name: data.name,
+        description: data.description || `Project created on ${new Date().toLocaleDateString()}`,
+        sourceType: data.sourceType || 'custom',
+        sourceUrl: data.sourceUrl,
+        status: 'draft',
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      };
 
       await setDoc(projectRef, projectData);
-      console.log('✅ Project created successfully:', projectRef.id);
-      
       return projectRef.id;
     } catch (error) {
-      console.error('🚨 Error creating project:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', {
-          name: error.name,
-          message: error.message,
-          stack: error.stack
-        });
-      }
+      console.error('Error creating project:', error);
       throw error;
     }
   }
@@ -511,88 +548,11 @@ export class FirebaseService {
         return false;
       }
 
-      // Calculate credit cost before making the API call
+      // Calculate credit cost
       const creditCost = FirebaseService.calculateCreditCost(sourceType, contentRequest);
       console.log('💰 Estimated credit cost:', creditCost);
 
-      // Get the appropriate endpoint
-      const endpoint = FirebaseService.getEndpointForContentType(sourceType);
-      console.log('🎯 Using endpoint:', endpoint);
-
-      // Prepare form data if we have a file
-      let requestBody: any;
-      let headers: HeadersInit = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      };
-
-      // For file uploads (audio, image, document)
-      if (contentRequest.file) {
-        const formData = new FormData();
-        formData.append('file', contentRequest.file);
-        formData.append('content_type', contentRequest.content_type);
-        formData.append('num_tweets', contentRequest.num_tweets.toString());
-        if (contentRequest.additional_context) {
-          formData.append('additional_context', contentRequest.additional_context);
-        }
-        formData.append('generate_image', contentRequest.generate_image.toString());
-        formData.append('is_premium', contentRequest.is_premium.toString());
-        requestBody = formData;
-        // Remove Content-Type header for FormData
-        delete headers['Content-Type'];
-      } else {
-        // For URL-based content (YouTube, blog)
-        requestBody = JSON.stringify({
-          url: contentRequest.url,
-          content_type: contentRequest.content_type,
-          num_tweets: contentRequest.num_tweets,
-          additional_context: contentRequest.additional_context,
-          generate_image: contentRequest.generate_image,
-          is_premium: contentRequest.is_premium,
-          project_id: contentRequest.project_id,
-          workspace_id: contentRequest.workspace_id,
-          user_id: contentRequest.user_id
-        });
-      }
-
-      console.log('🚀 Making API request:', {
-        endpoint,
-        method: 'POST',
-        headers,
-        bodyPreview: contentRequest.file ? 'FormData with file' : requestBody
-      });
-
-      // Make API call to generate content
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/content-sources/${endpoint}`,
-        {
-          method: 'POST',
-          headers,
-          body: requestBody
-        }
-      );
-
-      console.log('📡 API Response:', { 
-        status: response.status, 
-        statusText: response.statusText,
-        endpoint
-      });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error('❌ API call failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          endpoint,
-          error: errorData
-        });
-        return false;
-      }
-
-      const responseData = await response.json();
-      console.log('✅ API call successful:', responseData);
-
-      // If content generation was successful, deduct credits
+      // Deduct credits
       const deducted = await FirebaseService.deductCredits(userId, creditCost);
       if (!deducted) {
         console.error('❌ Failed to deduct credits');
@@ -631,6 +591,105 @@ export class FirebaseService {
         callback(null, false);
       }
     });
+  }
+
+  static async storeGeneratedTweets(projectId: string, userId: string, tweets: Tweet[]): Promise<string[]> {
+    try {
+      console.log('📝 Storing generated tweets:', { projectId, userId, numTweets: tweets.length });
+      
+      const tweetRefs = tweets.map(tweet => {
+        const tweetRef = doc(collection(db, 'projects', projectId, 'tweets'));
+        
+        // Create base tweet data with required fields
+        const tweetData: any = {
+          id: tweetRef.id,
+          projectId,
+          userId,
+          text: tweet.text || '',  // Ensure text is never undefined
+          isThread: Boolean(tweet.isThread),  // Convert to boolean
+          status: tweet.status || 'draft',
+          createdAt: Timestamp.now(),
+          updatedAt: Timestamp.now(),
+        };
+
+        // Only add optional fields if they exist and are not undefined/null
+        if (tweet.threadPosition !== undefined && tweet.threadPosition !== null) {
+          tweetData.threadPosition = tweet.threadPosition;
+        }
+
+        if (tweet.imageUrl && typeof tweet.imageUrl === 'string') {
+          tweetData.imageUrl = tweet.imageUrl;
+        }
+
+        if (tweet.imageMetadata && Object.keys(tweet.imageMetadata).length > 0) {
+          tweetData.imageMetadata = tweet.imageMetadata;
+        }
+
+        if (tweet.isPremiumContent !== undefined && tweet.isPremiumContent !== null) {
+          tweetData.isPremiumContent = Boolean(tweet.isPremiumContent);
+        }
+
+        if (tweet.contentId && typeof tweet.contentId === 'string') {
+          tweetData.contentId = tweet.contentId;
+        }
+
+        // Log the final tweet data for debugging
+        console.log('Tweet data to be stored:', JSON.stringify(tweetData, null, 2));
+
+        return {
+          ref: tweetRef,
+          data: tweetData
+        };
+      });
+
+      // Store all tweets in parallel
+      await Promise.all(
+        tweetRefs.map(({ ref, data }) => setDoc(ref, data))
+      );
+
+      console.log('✅ Successfully stored tweets');
+      return tweetRefs.map(({ ref }) => ref.id);
+    } catch (error) {
+      console.error('❌ Error storing tweets:', error);
+      throw error;
+    }
+  }
+
+  static async getProjectTweets(projectId: string): Promise<Tweet[]> {
+    try {
+      console.log('🔍 Getting tweets for project:', projectId);
+      
+      const tweetsRef = collection(db, 'projects', projectId, 'tweets');
+      const tweetsSnapshot = await getDocs(tweetsRef);
+      
+      const tweets = tweetsSnapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id,
+      })) as Tweet[];
+
+      console.log('✅ Retrieved tweets:', tweets.length);
+      return tweets;
+    } catch (error) {
+      console.error('❌ Error getting tweets:', error);
+      throw error;
+    }
+  }
+
+  static async updateTweet(projectId: string, tweetId: string, data: Partial<Tweet>): Promise<void> {
+    try {
+      console.log('📝 Updating tweet:', { projectId, tweetId, data });
+      
+      const tweetRef = doc(db, 'projects', projectId, 'tweets', tweetId);
+      await updateDoc(tweetRef, {
+        ...data,
+        updatedAt: Timestamp.now(),
+      });
+
+      console.log('✅ Tweet updated successfully');
+    } catch (error) {
+      console.error('❌ Error updating tweet:', error);
+      throw error;
+    }
   }
 }
 

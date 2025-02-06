@@ -1,8 +1,34 @@
 import { Timestamp } from 'firebase/firestore';
 
-export type PlanType = 'free' | 'solo' | 'team' | 'agency';
+export const PLAN_FEATURES = {
+  free: {
+    aiCreditsPerMonth: 100,
+    maxPosts: 50,
+    maxWorkspaces: 1,
+    canBuyCredits: false,
+  },
+  solo: {
+    aiCreditsPerMonth: 500,
+    maxPosts: 200,
+    maxWorkspaces: 2,
+    canBuyCredits: true,
+  },
+  team: {
+    aiCreditsPerMonth: 2000,
+    maxPosts: 1000,
+    maxWorkspaces: 5,
+    canBuyCredits: true,
+  },
+  agency: {
+    aiCreditsPerMonth: 5000,
+    maxPosts: 5000,
+    maxWorkspaces: 10,
+    canBuyCredits: true,
+  }
+} as const;
 
-export type SubscriptionStatus = 'trial' | 'active' | 'canceled' | 'past_due' | 'unpaid';
+export type PlanType = keyof typeof PLAN_FEATURES;
+export type SubscriptionStatus = 'trial' | 'active' | 'canceled' | 'past_due';
 
 export interface UserSubscription {
   userId: string;
@@ -82,73 +108,6 @@ export interface CreditUsage {
     storage: number;
   };
 }
-
-export const PLAN_FEATURES: Record<PlanType, PlanFeatures> = {
-  free: {
-    maxWorkspaces: 1,
-    maxTeamMembers: 1,
-    postsPerMonth: 10,
-    scheduling: true,
-    addImages: true,
-    addVideos: true,
-    aiCreditsPerMonth: 25,
-    canBuyCredits: false,
-    activityLogs: false,
-    maxStorageGB: 1,
-    canGenerateVideos: false,
-    canGenerateImages: true,
-    maxPostsPerDay: 5,
-    maxThreadsPerDay: 1,
-  },
-  solo: {
-    maxWorkspaces: 1,
-    maxTeamMembers: 1,
-    postsPerMonth: 'unlimited',
-    scheduling: true,
-    addImages: true,
-    addVideos: true,
-    aiCreditsPerMonth: 500,
-    canBuyCredits: true,
-    activityLogs: false,
-    maxStorageGB: 10,
-    canGenerateVideos: true,
-    canGenerateImages: true,
-    maxPostsPerDay: 'unlimited',
-    maxThreadsPerDay: 'unlimited',
-  },
-  team: {
-    maxWorkspaces: 2,
-    maxTeamMembers: 2,
-    postsPerMonth: 'unlimited',
-    scheduling: true,
-    addImages: true,
-    addVideos: true,
-    aiCreditsPerMonth: 2000,
-    canBuyCredits: true,
-    activityLogs: false,
-    maxStorageGB: 50,
-    canGenerateVideos: true,
-    canGenerateImages: true,
-    maxPostsPerDay: 'unlimited',
-    maxThreadsPerDay: 'unlimited',
-  },
-  agency: {
-    maxWorkspaces: 'unlimited',
-    maxTeamMembers: 'unlimited',
-    postsPerMonth: 'unlimited',
-    scheduling: true,
-    addImages: true,
-    addVideos: true,
-    aiCreditsPerMonth: 5000,
-    canBuyCredits: true,
-    activityLogs: true,
-    maxStorageGB: 'unlimited',
-    canGenerateVideos: true,
-    canGenerateImages: true,
-    maxPostsPerDay: 'unlimited',
-    maxThreadsPerDay: 'unlimited',
-  },
-};
 
 export const CREDIT_COSTS: CreditCost = {
   generateTweets: 10,    // 10 credits for 10 tweets

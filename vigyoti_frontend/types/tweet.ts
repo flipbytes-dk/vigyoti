@@ -1,57 +1,61 @@
 export interface Tweet {
   id: string;
-  tweet_text: string;
+  text: string;
   status: 'draft' | 'scheduled' | 'published';
-  scheduled_date?: Date | null;
-  image_url?: string | null;
-  image_generation_details?: {
+  scheduledDate?: Date | null;
+  imageUrl?: string | null;
+  imageGenerationDetails?: {
     prompt?: string;
-    aspect_ratio?: string;
-    style_type?: string;
-    magic_prompt_option?: string;
+    aspectRatio?: string;
+    styleType?: string;
+    magicPromptOption?: string;
   } | null;
-  thread_position?: number;
-  is_thread: boolean;
-  is_premium_content: boolean;
+  threadPosition?: number;
+  isThread: boolean;
+  isPremiumContent: boolean;
   deleted?: boolean;
+  projectId?: string;
+  userId?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface ImageGenerationOptions {
   prompt: string;
-  tweet_text: string;
+  text: string;
   summary: string;
-  aspect_ratio: '1:1' | '9:16' | '16:9';
-  style_type: 'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime';
-  magic_prompt_option: string;
-  negative_prompt?: string;
+  aspectRatio: '1:1' | '9:16' | '16:9';
+  styleType: 'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime';
+  magicPromptOption: string;
+  negativePrompt?: string;
 }
 
 export interface TweetResponse {
-  tweet_text: string;
-  is_thread: boolean;
-  thread_position: number;
-  is_premium_content: boolean;
-  image_url: string | null;
-  image_generation_details: {
+  text: string;
+  isThread: boolean;
+  threadPosition: number;
+  isPremiumContent: boolean;
+  imageUrl: string | null;
+  imageGenerationDetails: {
     prompt?: string;
-    aspect_ratio?: string;
-    style_type?: string;
-    magic_prompt_option?: string;
+    aspectRatio?: string;
+    styleType?: string;
+    magicPromptOption?: string;
   } | null;
 }
 
 export interface TweetFormData {
-  tweet_text: string;
-  is_thread: boolean;
-  thread_position: number;
-  is_premium_content: boolean;
-  image_url?: string;
-  image_generation_details?: {
+  text: string;
+  isThread: boolean;
+  threadPosition: number;
+  isPremiumContent: boolean;
+  imageUrl?: string;
+  imageGenerationDetails?: {
     prompt?: string;
-    aspect_ratio?: string;
-    style_type?: string;
-    magic_prompt_option?: string;
+    aspectRatio?: string;
+    styleType?: string;
+    magicPromptOption?: string;
   };
   status: 'draft' | 'scheduled' | 'published';
-  scheduled_date?: Date;
+  scheduledDate?: Date;
 } 

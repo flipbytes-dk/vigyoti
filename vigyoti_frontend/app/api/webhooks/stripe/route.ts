@@ -1,10 +1,10 @@
 import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
-import { adminAuth } from '@/lib/firebase-admin';
 import Stripe from 'stripe';
 import { PlanType, SubscriptionStatus, PLAN_FEATURES } from '@/types/subscription';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { FirebaseService } from '@/services/firebase';
 
 const db = getFirestore();
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
@@ -60,7 +60,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   console.log('📋 Mapped plan:', plan);
 
   try {
-    // Update user document with subscription info
+    // Initialize or update user subscription data
+    const isNewSubscription = !userData.subscription;
     const subscriptionData = {
       subscription: {
         plan,
@@ -79,6 +80,11 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         lastRefill: now,
         nextRefill: Timestamp.fromMillis(subscription.current_period_end * 1000),
       },
+      usage: isNewSubscription ? {
+        postsThisMonth: 0,
+        creditsThisMonth: 0,
+        storageUsed: 0
+      } : userData.usage,
       updatedAt: now
     };
 
@@ -91,22 +97,29 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       .get();
 
     if (workspacesSnapshot.empty) {
-      console.log('📁 Creating default workspace for user');
-      const workspaceRef = db.collection('workspaces').doc();
-      await workspaceRef.set({
-        id: workspaceRef.id,
-        name: 'My Workspace',
-        description: 'Default workspace',
-        ownerId: userId,
-        createdAt: now,
-        updatedAt: now,
-      });
+      try {
+        console.log('📁 Creating default workspace for user');
+        const workspaceId = await FirebaseService.createWorkspace(
+          userId, 
+          'My Workspace',
+          'Default workspace created with your subscription'
+        );
+        console.log('✅ Created default workspace:', workspaceId);
 
-      // Add workspace to user's workspaces array
-      await userDoc.ref.update({
-        workspaces: [workspaceRef.id]
-      });
-      console.log('✅ Created default workspace:', workspaceRef.id);
+        // Create default project
+        const projectId = await FirebaseService.createProject(
+          userId,
+          workspaceId,
+          {
+            name: 'My First Project',
+            description: 'Get started with your first project'
+          }
+        );
+        console.log('✅ Created default project:', projectId);
+      } catch (error) {
+        console.error('❌ Error creating default workspace/project:', error);
+        // Don't throw error here, as we want the subscription to succeed even if workspace creation fails
+      }
     }
 
     // Update credits document
