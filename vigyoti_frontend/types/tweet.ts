@@ -1,23 +1,49 @@
-export interface Tweet {
-  id: string;
+import { Tweet as FirebaseTweet } from './firebase';
+import { Timestamp } from 'firebase/firestore';
+
+// Client-side Tweet interface that extends the Firebase Tweet
+export interface Tweet extends Omit<FirebaseTweet, 'createdAt' | 'updatedAt'> {
   text: string;
-  status: 'draft' | 'scheduled' | 'published';
+  createdAt: Timestamp | Date;
+  updatedAt: Timestamp | Date;
   scheduledDate?: Date | null;
-  imageUrl?: string | null;
-  imageGenerationDetails?: {
+  deleted?: boolean;
+}
+
+// Interface for tweet generation response
+export interface GeneratedTweetDetails {
+  text: string;
+  isThread: boolean;
+  threadPosition?: number;
+  imageUrl?: string;
+  imageMetadata?: {
     prompt?: string;
     aspectRatio?: string;
     styleType?: string;
-    magicPromptOption?: string;
-  } | null;
-  threadPosition?: number;
+    storageRef?: string;
+    uploadType?: 'ai_generated' | 'user_upload';
+  };
+}
+
+export interface GeneratedTweetResponse {
+  generated_tweets: GeneratedTweetDetails[];
+}
+
+export interface TweetFormData {
+  text: string;
   isThread: boolean;
+  threadPosition?: number;
+  status: 'draft' | 'scheduled' | 'published';
+  imageUrl?: string;
+  imageMetadata?: {
+    prompt?: string;
+    aspectRatio?: string;
+    styleType?: string;
+    storageRef?: string;
+    uploadType?: 'ai_generated' | 'user_upload';
+    originalName?: string;
+  };
   isPremiumContent: boolean;
-  deleted?: boolean;
-  projectId?: string;
-  userId?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
 }
 
 export interface ImageGenerationOptions {
@@ -36,26 +62,12 @@ export interface TweetResponse {
   threadPosition: number;
   isPremiumContent: boolean;
   imageUrl: string | null;
-  imageGenerationDetails: {
+  imageMetadata: {
     prompt?: string;
     aspectRatio?: string;
     styleType?: string;
-    magicPromptOption?: string;
+    storageRef?: string;
+    uploadType?: 'ai_generated' | 'user_upload';
+    originalName?: string;
   } | null;
-}
-
-export interface TweetFormData {
-  text: string;
-  isThread: boolean;
-  threadPosition: number;
-  isPremiumContent: boolean;
-  imageUrl?: string;
-  imageGenerationDetails?: {
-    prompt?: string;
-    aspectRatio?: string;
-    styleType?: string;
-    magicPromptOption?: string;
-  };
-  status: 'draft' | 'scheduled' | 'published';
-  scheduledDate?: Date;
 } 

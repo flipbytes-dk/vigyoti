@@ -375,6 +375,7 @@ export class FirebaseService {
       status: 'draft',
       imageUrl: data.imageUrl,
       imageMetadata: data.imageMetadata,
+      isPremiumContent: data.isPremiumContent || false,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };

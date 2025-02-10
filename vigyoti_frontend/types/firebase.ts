@@ -76,12 +76,17 @@ export interface Tweet {
   text: string;
   isThread: boolean;
   threadPosition?: number;
-  status: 'draft' | 'scheduled' | 'published';
-  scheduledFor?: Timestamp;
-  publishedAt?: Timestamp;
+  status: 'draft' | 'published' | 'scheduled';
   imageUrl?: string;
-  imageMetadata?: any;
-  isPremiumContent?: boolean;
+  imageMetadata?: {
+    prompt?: string;
+    aspectRatio?: string;
+    styleType?: string;
+    storageRef?: string;
+    uploadType?: 'ai_generated' | 'user_upload';
+    originalName?: string;
+  };
+  isPremiumContent: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 } 
