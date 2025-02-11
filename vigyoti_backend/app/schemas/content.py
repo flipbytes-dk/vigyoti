@@ -127,6 +127,10 @@ class ImageGenerationRequest(BaseModel):
     summary: str
     tweet_text: str
     aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "16:10", "10:16", "3:1", "1:3"]
+    style_type: Literal["Auto", "General", "Realistic", "Design", "Render 3D", "Anime"] = "Auto"
+    magic_prompt_option: str = "Auto"
+    negative_prompt: Optional[str] = None
+    prompt: Optional[str] = None  # Add optional field for user's custom prompt
 
 class ImageGenerationResponse(BaseModel):
     image_url: str

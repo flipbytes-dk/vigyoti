@@ -561,7 +561,11 @@ async def generate_image(request: ImageGenerationRequest):
         result = await generate_image_from_prompt(
             summary=request.summary,
             tweet_text=request.tweet_text,
-            aspect_ratio=request.aspect_ratio
+            aspect_ratio=request.aspect_ratio,
+            style_type=request.style_type,
+            magic_prompt_option=request.magic_prompt_option,
+            negative_prompt=request.negative_prompt,
+            prompt=request.prompt if hasattr(request, 'prompt') else None  # Pass the custom prompt if provided
         )
         
         return ImageGenerationResponse(

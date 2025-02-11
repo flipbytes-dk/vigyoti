@@ -64,7 +64,11 @@ async def generate_image_prompt(summary: str, tweet_text: str) -> str:
 async def generate_image_from_prompt(
     summary: str,
     tweet_text: str,
-    aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "16:10", "10:16", "3:1", "1:3"]
+    aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "16:10", "10:16", "3:1", "1:3"],
+    style_type: Literal["Auto", "General", "Realistic", "Design", "Render 3D", "Anime"] = "Auto",
+    magic_prompt_option: str = "Auto",
+    negative_prompt: Optional[str] = None,
+    prompt: Optional[str] = None  # Add prompt parameter to accept user's custom prompt
 ) -> Dict[str, any]:
     """Generate an image using Ideogram v2 Turbo model based on the content and aspect ratio."""
     try:
@@ -74,16 +78,17 @@ async def generate_image_from_prompt(
 
         logger.info("REPLICATE_API_TOKEN is set and available")
         
-        # Generate appropriate image prompt
-        image_prompt = await generate_image_prompt(summary, tweet_text)
+        # Use user's custom prompt if provided, otherwise generate one
+        image_prompt = prompt if prompt else await generate_image_prompt(summary, tweet_text)
         
         # Configure the model parameters based on Ideogram v2 Turbo requirements
         model_params = {
             "prompt": image_prompt,
-            "magic_prompt_option": "Auto",
+            "magic_prompt_option": magic_prompt_option,
             "aspect_ratio": aspect_ratio,
             "resolution": "None",
-            "style_type": "None"
+            "style_type": style_type,
+            "negative_prompt": "None"
         }
         
         logger.info(f"Calling Replicate Ideogram with parameters: {model_params}")
@@ -107,11 +112,11 @@ async def generate_image_from_prompt(
         # Return the URL string and the prompt used
         return {
             "image_url": image_url,
-            "image_prompt": image_prompt,  # Include the generated prompt in response
+            "image_prompt": image_prompt,  # Return the actual prompt used (either custom or generated)
             "cost_info": {
-                "prompt_generation_cost": 0.01,  # Cost for GPT-4 prompt generation
+                "prompt_generation_cost": 0.01 if not prompt else 0,  # Only charge for prompt generation if we generated one
                 "image_generation_cost": 0.05,   # Cost for Ideogram image generation
-                "total_cost": 0.06
+                "total_cost": 0.06 if not prompt else 0.05  # Adjust total cost based on whether we generated a prompt
             }
         }
 

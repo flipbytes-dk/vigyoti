@@ -238,10 +238,13 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
   const [style, setStyle] = useState<'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime'>('Auto');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState<string>('');
 
   // Update local state when tweet prop changes
   useEffect(() => {
     setEditingTweet(tweet);
+    setCustomPrompt(tweet?.imageMetadata?.prompt || '');
   }, [tweet]);
 
   const handleTextChange = (text: string) => {
@@ -262,6 +265,111 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
     } catch (error) {
       console.error('Error saving tweet:', error);
       toast.error('Failed to save tweet');
+    }
+  };
+
+  const handleRegenerateImage = async () => {
+    if (!editingTweet) return;
+    setIsGeneratingImage(true);
+    try {
+      // Check user session and credits
+      const session = await getSession() as Session | null;
+      if (!session?.user?.id) {
+        throw new Error('Please sign in to generate images');
+      }
+
+      // Check if user has enough credits for image generation
+      const hasCredits = await FirebaseService.checkUserCredits(session.user.id);
+      if (!hasCredits) {
+        throw new Error('Insufficient credits to generate image');
+      }
+
+      // Get Firebase auth token
+      const auth = getAuth();
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) {
+        throw new Error('Authentication failed');
+      }
+
+      // Generate image through API - directly using the custom prompt
+      const response = await fetch(`${API_BASE_URL}/api/v1/content-sources/generate-image`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          prompt: customPrompt, // Directly use the custom prompt
+          tweet_text: editingTweet.text,
+          summary: editingTweet.text.substring(0, 100),
+          aspect_ratio: editingTweet.imageMetadata?.aspectRatio as '1:1' | '9:16' | '16:9' || '1:1',
+          style_type: editingTweet.imageMetadata?.styleType as 'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime' || 'Auto',
+          magic_prompt_option: 'Auto',
+          negative_prompt: undefined
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error('Image generation error:', errorData);
+        throw new Error('Failed to generate image');
+      }
+      
+      const data = await response.json();
+      console.log('Image generation response:', data);
+
+      if (data.image_url) {
+        // Download the generated image
+        const imageResponse = await fetch(data.image_url);
+        const imageBlob = await imageResponse.blob();
+
+        // Create storage path
+        const timestamp = Date.now();
+        const storageRef = `projects/${editingTweet.projectId}/tweets/${editingTweet.id}/images/generated_${timestamp}.png`;
+        const imageRef = ref(storage, storageRef);
+
+        // Upload to Firebase Storage
+        await uploadBytes(imageRef, imageBlob, {
+          contentType: 'image/png',
+          customMetadata: {
+            uploadType: 'ai_generated',
+            prompt: customPrompt, // Use the custom prompt in metadata
+            aspectRatio: editingTweet.imageMetadata?.aspectRatio || '1:1',
+            styleType: editingTweet.imageMetadata?.styleType || 'Auto'
+          }
+        });
+
+        // Get the storage URL
+        const imageUrl = await getDownloadURL(imageRef);
+
+        // Deduct credits for image generation
+        await FirebaseService.deductCredits(session.user.id, CREDIT_COSTS.generateImage, 'images');
+
+        // Update tweet with new image
+        const updatedTweet: FirebaseTweet = {
+          ...editingTweet,
+          imageUrl,
+          imageMetadata: {
+            prompt: customPrompt, // Use the custom prompt in tweet metadata
+            aspectRatio: editingTweet.imageMetadata?.aspectRatio || '1:1',
+            styleType: editingTweet.imageMetadata?.styleType || 'Auto',
+            storageRef,
+            uploadType: 'ai_generated'
+          }
+        };
+
+        await handleEditTweet(updatedTweet);
+        setEditingTweet(updatedTweet);
+        toast.success('Image regenerated successfully with custom prompt');
+      } else {
+        throw new Error('No image URL in response');
+      }
+      setIsEditingPrompt(false);
+    } catch (error) {
+      console.error('Error regenerating image:', error);
+      toast.error('Failed to regenerate image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setIsGeneratingImage(false);
     }
   };
 
@@ -488,8 +596,8 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl p-0 gap-0 bg-white">
-        <div className="border-b">
+      <DialogContent className="max-w-4xl p-0 gap-0 bg-white max-h-[90vh] overflow-y-auto">
+        <div className="border-b sticky top-0 bg-white z-10">
           <DialogHeader className="px-6 py-4">
             <DialogTitle className="text-xl font-bold">Edit Tweet</DialogTitle>
           </DialogHeader>
@@ -513,22 +621,80 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
                     placeholder="What's happening?"
                   />
                   {editingTweet.imageUrl && (
-                    <div className="mt-4 rounded-xl overflow-hidden relative group">
-                      <img src={editingTweet.imageUrl} alt="Tweet media" className="w-full h-auto" />
-                      {(isGeneratingImage || isUploading) && (
-                        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
+                    <div className="mt-4 space-y-4">
+                      <div className="rounded-xl overflow-hidden relative group">
+                        <img src={editingTweet.imageUrl} alt="Tweet media" className="w-full h-auto" />
+                        {(isGeneratingImage || isUploading) && (
+                          <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setEditingTweet({ ...editingTweet, imageUrl: undefined, imageMetadata: undefined })}
+                            disabled={isGeneratingImage || isUploading}
+                          >
+                            Remove Image
+                          </Button>
                         </div>
-                      )}
-                      <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => setEditingTweet({ ...editingTweet, imageUrl: undefined, imageMetadata: undefined })}
-                          disabled={isGeneratingImage || isUploading}
-                        >
-                          Remove Image
-                        </Button>
+                      </div>
+
+                      {/* Image Prompt Section - Updated to make prompt directly editable */}
+                      <div className="space-y-2 bg-gray-50 p-4 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <Label>Image Generation Prompt</Label>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setIsEditingPrompt(!isEditingPrompt);
+                              if (!isEditingPrompt) {
+                                setCustomPrompt(editingTweet.imageMetadata?.prompt || '');
+                              }
+                            }}
+                            className="text-blue-600 hover:text-blue-800"
+                          >
+                            {isEditingPrompt ? 'Cancel Edit' : 'Edit Prompt'}
+                          </Button>
+                        </div>
+                        {isEditingPrompt ? (
+                          <div className="space-y-2">
+                            <Textarea
+                              value={customPrompt}
+                              onChange={(e) => setCustomPrompt(e.target.value)}
+                              placeholder="Edit the prompt for image generation..."
+                              className="min-h-[100px] mt-2"
+                              disabled={isGeneratingImage}
+                              autoFocus
+                            />
+                            <Button
+                              onClick={handleRegenerateImage}
+                              disabled={isGeneratingImage || !customPrompt.trim()}
+                              className="w-full"
+                            >
+                              {isGeneratingImage ? (
+                                <>
+                                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                  Regenerating Image...
+                                </>
+                              ) : (
+                                <>
+                                  <Wand2 className="h-4 w-4 mr-2" />
+                                  Regenerate with New Prompt
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-600 whitespace-pre-wrap mt-2 p-2 rounded bg-white">
+                            {editingTweet.imageMetadata?.prompt || 'No prompt available'}
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -567,7 +733,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
           </div>
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t">
+        <DialogFooter className="px-6 py-4 border-t sticky bottom-0 bg-white z-10">
           <div className="flex justify-between w-full">
             <Button variant="destructive" onClick={() => {
               if (window.confirm('Are you sure you want to delete this tweet?')) {
@@ -603,7 +769,7 @@ interface AddImageDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onUpload: (file: File) => void;
-  onGenerate: (options: ImageGenerationOptions) => Promise<void>;
+  onGenerate: (options: ImageGenerationOptions) => Promise<{ image_prompt?: string } | void>;
   defaultValues?: {
     prompt?: string | null;
     aspectRatio?: string | null;
@@ -631,15 +797,27 @@ const AddImageDialog = ({
   const [style, setStyle] = useState<ImageGenerationOptions['style_type']>(
     (defaultValues?.styleType as ImageGenerationOptions['style_type']) || "Auto"
   );
+  const [generatedPrompt, setGeneratedPrompt] = useState<string>(defaultValues?.prompt || '');
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState<string>(defaultValues?.prompt || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset states when dialog opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      setGeneratedPrompt(defaultValues?.prompt || '');
+      setCustomPrompt(defaultValues?.prompt || '');
+      setIsEditingPrompt(false);
+    }
+  }, [isOpen, defaultValues?.prompt]);
 
   const handleGenerate = async () => {
     if (!tweet) return;
     
     setIsGenerating(true);
     try {
-      await onGenerate({
-        prompt: tweet.imageMetadata?.prompt || '',
+      const response = await onGenerate({
+        prompt: customPrompt || generatedPrompt || '',
         text: tweet.text,
         summary: tweet.text.substring(0, 100),
         aspect_ratio: aspectRatio,
@@ -647,6 +825,13 @@ const AddImageDialog = ({
         magic_prompt_option: 'Auto',
         negative_prompt: undefined
       });
+      
+      // Update the generated prompt if we get a new one from the API
+      if (response?.image_prompt) {
+        setGeneratedPrompt(response.image_prompt);
+        setCustomPrompt(response.image_prompt);
+      }
+      
       onClose();
     } catch (error) {
       console.error('Error generating image:', error);
@@ -717,6 +902,34 @@ const AddImageDialog = ({
 
           {method === 'generate' && (
             <div className="space-y-4">
+              {/* Prompt Section */}
+              {generatedPrompt && (
+                <div className="space-y-2 bg-gray-50 p-4 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <Label>AI Generated Prompt</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsEditingPrompt(!isEditingPrompt)}
+                      className="text-blue-600 hover:text-blue-800"
+                    >
+                      {isEditingPrompt ? 'Cancel Edit' : 'Edit Prompt'}
+                    </Button>
+                  </div>
+                  {isEditingPrompt ? (
+                    <Textarea
+                      value={customPrompt}
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      placeholder="Edit the prompt for image generation..."
+                      className="min-h-[100px] mt-2"
+                      disabled={isGenerating}
+                    />
+                  ) : (
+                    <p className="text-sm text-gray-600 whitespace-pre-wrap mt-2">{generatedPrompt}</p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label>Aspect Ratio</Label>
                 <Select 
@@ -773,7 +986,7 @@ const AddImageDialog = ({
                 ) : (
                   <>
                     <Wand2 className="h-4 w-4 mr-2" />
-                    Generate Image
+                    {isEditingPrompt ? 'Generate with Custom Prompt' : 'Generate Image'}
                   </>
                 )}
               </Button>
