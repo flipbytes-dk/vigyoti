@@ -19,7 +19,7 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
 import type { FirebaseUser, Project, Content, Tweet, Workspace } from '../types/firebase';
-import { PLAN_POST_LIMITS, PLAN_FEATURES } from '../types/subscription';
+import { PLAN_POST_LIMITS, PLAN_FEATURES, CREDIT_COSTS } from '../types/subscription';
 import { getAuth, onAuthStateChanged, User as FirebaseAuthUser } from 'firebase/auth';
 
 export interface ContentGenerationRequest {
@@ -34,23 +34,6 @@ export interface ContentGenerationRequest {
   user_id: string;
   file?: File;  // For audio, image, document uploads
 }
-
-// Credit costs configuration
-const CREDIT_COSTS = {
-  base: {
-    youtube: 15,    // Higher cost due to video processing
-    blog: 10,       // Base cost for blog/article
-    audio: 20,      // Higher cost due to audio transcription
-    image: 12,      // Base cost for image analysis
-    document: 15,   // Base cost for document processing
-    custom: 8       // Lower cost for custom text
-  },
-  features: {
-    image_generation: 20,
-    premium: 15,
-    thread_per_tweet: 5
-  }
-} as const;
 
 export class FirebaseService {
   // User Operations
@@ -599,29 +582,19 @@ export class FirebaseService {
 
   static calculateCreditCost(sourceType: string, request: ContentGenerationRequest): number {
     try {
-      // Get base cost for the content type
-      const baseCostPerTweet = CREDIT_COSTS.base[sourceType as keyof typeof CREDIT_COSTS.base] || 10;
-      let totalCost = baseCostPerTweet * request.num_tweets;
+      // Base cost is 1 credit per tweet
+      let totalCost = CREDIT_COSTS.generateTweet * request.num_tweets;
 
-      // Add feature costs
+      // Add image generation cost if enabled
       if (request.generate_image) {
-        totalCost += CREDIT_COSTS.features.image_generation;
-      }
-      if (request.is_premium) {
-        totalCost += CREDIT_COSTS.features.premium;
-      }
-      if (request.content_type === 'thread') {
-        totalCost += request.num_tweets * CREDIT_COSTS.features.thread_per_tweet;
+        totalCost += CREDIT_COSTS.generateImage;
       }
 
       console.log('💳 Credit cost breakdown:', {
         sourceType,
-        baseCostPerTweet,
-        totalTweets: request.num_tweets,
-        baseCost: baseCostPerTweet * request.num_tweets,
-        imageGeneration: request.generate_image ? CREDIT_COSTS.features.image_generation : 0,
-        premium: request.is_premium ? CREDIT_COSTS.features.premium : 0,
-        threadCost: request.content_type === 'thread' ? request.num_tweets * CREDIT_COSTS.features.thread_per_tweet : 0,
+        numTweets: request.num_tweets,
+        baseCost: CREDIT_COSTS.generateTweet * request.num_tweets,
+        imageGeneration: request.generate_image ? CREDIT_COSTS.generateImage : 0,
         totalCost
       });
 

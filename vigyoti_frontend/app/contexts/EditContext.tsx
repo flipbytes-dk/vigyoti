@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, ReactNode } from 'react';
-import { Tweet } from '../types/tweet';
+import { Tweet } from '@/types/tweets';
 
 interface EditContextType {
   editingTweet: Tweet | null;

@@ -3,21 +3,11 @@ import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
 import { getFirebaseToken } from '@/lib/firebase/auth';
 import { CreditService } from '@/lib/services/credit-service';
-import { PLAN_FEATURES, PlanType, PlanFeatures } from '@/types/subscription';
+import { PLAN_FEATURES, PlanType, PlanFeatures, CREDIT_COSTS } from '@/types/subscription';
 import { getAuth } from 'firebase/auth';
 import { app } from '@/lib/firebase';
 
-// Define credit costs for different actions
-export const CREDIT_COSTS = {
-  tweet_generation: 1,
-  thread_generation: 3,
-  ai_video: 10,
-  ai_image: 5,
-  tweet_rewrite: 1,
-  storage: 1, // per GB
-} as const;
-
-export type CreditAction = keyof typeof CREDIT_COSTS;
+export type CreditAction = 'tweet_generation' | 'image_generation' | 'storage';
 
 /**
  * Middleware to validate credit availability before actions
@@ -28,9 +18,9 @@ export async function validateCredits(
   quantity: number = 1
 ) {
   try {
-    // Get NextAuth token
+    // Get the user's session and plan
     const token = await getToken({ req });
-    if (!token?.sub) {
+    if (!token) {
       return {
         isValid: false,
         error: 'Unauthorized',
@@ -38,32 +28,37 @@ export async function validateCredits(
       };
     }
 
-    // Get Firebase token and sign in
-    await getFirebaseToken(req);
+    // Get the user's plan features
+    const planType = token.plan as PlanType;
+    const planFeatures = PLAN_FEATURES[planType];
 
-    // Calculate required credits
-    const requiredCredits = CREDIT_COSTS[action] * quantity;
+    // Calculate credit cost
+    let creditCost = 0;
+    switch (action) {
+      case 'tweet_generation':
+        creditCost = CREDIT_COSTS.generateTweet * quantity;
+        break;
+      case 'image_generation':
+        creditCost = CREDIT_COSTS.generateImage * quantity;
+        break;
+      case 'storage':
+        creditCost = CREDIT_COSTS.storagePerGB * quantity;
+        break;
+    }
 
     // Check if user has enough credits
-    const hasCredits = await CreditService.hasEnoughCredits(
-      token.sub,
-      requiredCredits
-    );
-
-    if (!hasCredits) {
+    const userCredits = await CreditService.useCredits(token.sub, creditCost);
+    if (!userCredits || userCredits.available < creditCost) {
       return {
         isValid: false,
         error: 'Insufficient credits',
         status: 403,
-        requiredCredits
+        available: userCredits?.available || 0,
+        required: creditCost
       };
     }
 
-    // Get user's plan to validate against plan limits
-    const userPlan = await CreditService.getUserPlan(token.sub);
-    const planFeatures: PlanFeatures = PLAN_FEATURES[userPlan];
-
-    // Validate against plan-specific limits
+    // Check plan-specific limits
     switch (action) {
       case 'storage':
         if (typeof planFeatures.maxStorageGB === 'number' && quantity > planFeatures.maxStorageGB) {
@@ -76,17 +71,7 @@ export async function validateCredits(
         }
         break;
       
-      case 'ai_video':
-        if (!planFeatures.canGenerateVideos) {
-          return {
-            isValid: false,
-            error: 'Video generation not available in your plan',
-            status: 403
-          };
-        }
-        break;
-
-      case 'ai_image':
+      case 'image_generation':
         if (!planFeatures.canGenerateImages) {
           return {
             isValid: false,
@@ -106,28 +91,18 @@ export async function validateCredits(
           };
         }
         break;
-
-      case 'thread_generation':
-        if (typeof planFeatures.maxThreadsPerDay === 'number' && quantity > planFeatures.maxThreadsPerDay) {
-          return {
-            isValid: false,
-            error: 'Daily thread limit exceeded for your plan',
-            status: 403,
-            limit: planFeatures.maxThreadsPerDay
-          };
-        }
-        break;
     }
 
     return {
       isValid: true,
-      requiredCredits
+      creditCost
     };
+
   } catch (error) {
     console.error('Error validating credits:', error);
     return {
       isValid: false,
-      error: 'Error validating credits',
+      error: 'Failed to validate credits',
       status: 500
     };
   }

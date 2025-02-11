@@ -56,6 +56,8 @@ export interface GeneratedTweetDetails {
 
 export interface GeneratedTweetResponse {
   generated_tweets: GeneratedTweetDetails[];
+  video_summary?: string;
+  full_transcript?: string;
 }
 
 // Form and UI-related interfaces

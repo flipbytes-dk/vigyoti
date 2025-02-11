@@ -106,18 +106,25 @@ export default function DashboardPage() {
     { name: 'Videos', value: 0 }
   ]);
 
+  const [loadingMessage, setLoadingMessage] = useState('Initializing dashboard...');
+  const [loadingProgress, setLoadingProgress] = useState(0);
+
   useEffect(() => {
     const loadDashboardData = async () => {
       if (session?.user?.id) {
         try {
-          console.log('🔄 Loading dashboard data for user:', session.user.id);
+          setLoadingMessage('Connecting to your account...');
+          setLoadingProgress(10);
           
           // Get user document from Firestore to get subscription details
           const userRef = doc(db, 'users', session.user.id);
           const userDoc = await getDoc(userRef);
           
+          setLoadingMessage('Loading user profile...');
+          setLoadingProgress(30);
+          
           if (!userDoc.exists()) {
-            console.log('❌ User document not found, creating default data');
+            setLoadingMessage('Setting up your account for the first time...');
             // Create default user data if it doesn't exist
             const defaultUserData = {
               id: session.user.id,
@@ -157,11 +164,15 @@ export default function DashboardPage() {
             throw new Error('Failed to load user data');
           }
 
+          setLoadingMessage('Loading your workspaces...');
+          setLoadingProgress(50);
+          
           // Load workspaces directly from user data
           const userWorkspaces = userData.workspaces || [];
           let workspacesData: Workspace[] = [];
           
           if (userWorkspaces.length > 0) {
+            setLoadingMessage('Fetching workspace details...');
             // Fetch workspace details
             const workspaceDocs = await Promise.all(
               userWorkspaces.map((wsId: string) => 
@@ -173,6 +184,9 @@ export default function DashboardPage() {
               .map(doc => ({ id: doc.id, ...doc.data() } as Workspace));
           }
 
+          setLoadingMessage('Calculating storage usage...');
+          setLoadingProgress(70);
+          
           // Get storage usage
           const storage = await StorageUsageService.getStorageUsage(session.user.id)
             .catch(() => ({ 
@@ -181,6 +195,9 @@ export default function DashboardPage() {
               percentage: ((userData.usage?.storageUsed || 0) / (1024 * 1024 * 1024)) * 100 
             }));
 
+          setLoadingMessage('Preparing subscription data...');
+          setLoadingProgress(80);
+          
           // Set subscription data
           const subscriptionData = {
             ...userData.subscription,
@@ -240,6 +257,9 @@ export default function DashboardPage() {
             { name: 'Videos', value: userData.usage?.videosThisMonth || 0 }
           ]);
 
+          setLoadingMessage('Loading your projects...');
+          setLoadingProgress(90);
+          
           if (workspacesData.length > 0) {
             const defaultWorkspace = workspacesData[0];
             setSelectedWorkspace(defaultWorkspace);
@@ -257,9 +277,15 @@ export default function DashboardPage() {
             })) as Project[];
             setProjects(projectsData);
           }
+
+          setLoadingMessage('Almost there...');
+          setLoadingProgress(95);
+          
         } catch (error) {
           console.error('Error loading dashboard data:', error);
+          setLoadingMessage('Something went wrong while loading your dashboard...');
         } finally {
+          setLoadingProgress(100);
           setLoading(false);
         }
       }
@@ -496,8 +522,19 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <DashboardLayout>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+        <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500" />
+          <div className="text-center space-y-2">
+            <h3 className="text-lg font-semibold text-gray-900">Loading your dashboard...</h3>
+            <p className="text-sm text-gray-500">{loadingMessage}</p>
+          </div>
+          <div className="max-w-md w-full bg-gray-100 h-2 rounded-full overflow-hidden mt-4">
+            <div 
+              className="h-full bg-blue-500 transition-all duration-500 ease-in-out" 
+              style={{ width: `${loadingProgress}%` }} 
+            />
+          </div>
+          <p className="text-xs text-gray-400">{loadingProgress}% complete</p>
         </div>
       </DashboardLayout>
     );

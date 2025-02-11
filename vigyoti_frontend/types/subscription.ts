@@ -6,24 +6,36 @@ export const PLAN_FEATURES = {
     maxPosts: 50,
     maxWorkspaces: 1,
     canBuyCredits: false,
+    maxStorageGB: 1,
+    canGenerateImages: false,
+    maxPostsPerDay: 10,
   },
   solo: {
     aiCreditsPerMonth: 500,
     maxPosts: 200,
     maxWorkspaces: 2,
     canBuyCredits: true,
+    maxStorageGB: 5,
+    canGenerateImages: true,
+    maxPostsPerDay: 50,
   },
   team: {
     aiCreditsPerMonth: 2000,
     maxPosts: 1000,
     maxWorkspaces: 5,
     canBuyCredits: true,
+    maxStorageGB: 20,
+    canGenerateImages: true,
+    maxPostsPerDay: 200,
   },
   agency: {
     aiCreditsPerMonth: 5000,
     maxPosts: 5000,
     maxWorkspaces: 10,
     canBuyCredits: true,
+    maxStorageGB: 100,
+    canGenerateImages: true,
+    maxPostsPerDay: 1000,
   }
 } as const;
 
@@ -95,13 +107,9 @@ export interface SubscriptionPlan {
 }
 
 export interface CreditCost {
-  generateTweets: number;  // 10 credits for 10 tweets
-  generateThread: number;  // 10 credits for 1 thread
-  generateVideo: number;   // 20 credits for 1 AI video
-  generateImage: number;   // 2 credits for 1 AI image
-  rewriteGPT: number;     // 1 credit for 1 rewrite
-  rewriteClaude: number;  // 1 credit for 1 rewrite
-  storagePerGB: number;   // 2 credits per 1GB per month
+  generateTweet: number;   // Cost per single tweet generation
+  generateImage: number;   // Cost per image generation
+  storagePerGB: number;   // Cost per GB of storage per month
 }
 
 export interface CreditUsage {
@@ -120,13 +128,9 @@ export interface CreditUsage {
 }
 
 export const CREDIT_COSTS: CreditCost = {
-  generateTweets: 10,    // 10 credits for 10 tweets
-  generateThread: 10,    // 10 credits for 1 thread
-  generateVideo: 20,     // 20 credits for 1 AI video
-  generateImage: 2,      // 2 credits for 1 AI image
-  rewriteGPT: 1,        // 1 credit for 1 rewrite
-  rewriteClaude: 1,     // 1 credit for 1 rewrite
-  storagePerGB: 2,      // 2 credits per 1GB per month
+  generateTweet: 1,     // 1 credit per tweet
+  generateImage: 5,     // 5 credits per image
+  storagePerGB: 2,     // 2 credits per GB per month
 };
 
 // Workspace limits by plan

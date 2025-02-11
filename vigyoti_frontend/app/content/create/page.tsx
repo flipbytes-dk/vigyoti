@@ -55,7 +55,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { EditProvider, useEdit } from "../../contexts/EditContext";
 import { Tweet as FirebaseTweet, Workspace } from '@/types/firebase';
-import type { Tweet } from '@/types/tweet';
+import type { Tweet } from '@/types/tweets';
 import { Timestamp } from "firebase/firestore";
 import { FirebaseService, ContentGenerationRequest } from "@/services/firebase";
 import { getAuth } from "firebase/auth";
@@ -806,6 +806,8 @@ export default function CreateContent() {
   const [projectId, setProjectId] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [videoSummary, setVideoSummary] = useState<string>('');
+  const [fullTranscript, setFullTranscript] = useState<string>('');
 
   const { data: sessionData } = useSession();
   const { selectedWorkspace: workspaceData } = useWorkspace();
@@ -1144,6 +1146,8 @@ export default function CreateContent() {
     try {
       setIsLoading(true);
       setError(null);
+      setVideoSummary('');
+      setFullTranscript('');
 
       const session = await getSession() as Session | null;
       if (!session?.user?.id) {
@@ -1230,6 +1234,14 @@ export default function CreateContent() {
 
       const data = await response.json();
       console.log('Generated tweets response:', data);
+
+      // Store video summary and transcript if available
+      if (data.video_summary) {
+        setVideoSummary(data.video_summary);
+      }
+      if (data.full_transcript) {
+        setFullTranscript(data.full_transcript);
+      }
 
       // Create Firestore document references first
       const tweetRefs = data.generated_tweets.map(() => doc(collection(db, 'projects', newProjectId, 'tweets')));
@@ -1530,6 +1542,27 @@ export default function CreateContent() {
     );
   };
 
+  const renderVideoContent = () => {
+    if (!videoSummary && !fullTranscript) return null;
+
+    return (
+      <div className="mb-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl p-6 shadow-sm">
+          <h4 className="text-lg font-semibold mb-4">Video Summary</h4>
+          <div className="h-[300px] overflow-y-auto prose prose-sm max-w-none">
+            {videoSummary || 'No summary available'}
+          </div>
+        </div>
+        <div className="bg-white rounded-xl p-6 shadow-sm">
+          <h4 className="text-lg font-semibold mb-4">Video Transcript</h4>
+          <div className="h-[300px] overflow-y-auto prose prose-sm max-w-none whitespace-pre-wrap">
+            {fullTranscript || 'No transcript available'}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderGeneratedContent = () => {
     return (
       <div className="space-y-8">
@@ -1539,6 +1572,8 @@ export default function CreateContent() {
           </Button>
           <h3 className="text-lg font-semibold">Review Generated Content</h3>
         </div>
+        
+        {renderVideoContent()}
         
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 place-items-center">
           {tweets.map((tweet) => (
