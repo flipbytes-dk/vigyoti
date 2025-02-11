@@ -7,7 +7,7 @@ import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { WorkspaceClient } from '@/lib/workspace-client';
 import { Workspace, Project } from '@/types/workspace';
-import { UserSubscription, UserCredits } from '@/types/subscription';
+import { UserCredits } from '@/types/subscription';
 import DashboardLayout from '@/components/dashboard/dashboard-layout';
 import {
   BarChart3,
@@ -37,36 +37,225 @@ import {
 
 import { useRouter } from 'next/navigation';
 import { Timestamp } from 'firebase/firestore';
+import { StorageUsageService } from '@/services/storage-usage';
+import { cn } from '@/lib/utils';
+import { UserSubscription } from '@/types/subscription';
+import { getDoc, doc, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+
+interface MetricDataPoint {
+  name: string;
+  value: number;
+}
+
+interface CreditUsageItem {
+  name: string;
+  value: number;
+}
+
+interface RecentActivity {
+  type: string;
+  timestamp: Timestamp;
+  details: string;
+  credits?: number;
+}
+
+interface DashboardUsage {
+  creditsUsedTweets: number;
+  creditsUsedThreads: number;
+  creditsUsedVideos: number;
+  creditsUsedImages: number;
+  postsThisMonth: number;
+  threadsThisMonth: number;
+  imagesThisMonth: number;
+  videosThisMonth: number;
+}
+
+interface ExtendedUserSubscription extends UserSubscription {
+  recentActivity?: RecentActivity[];
+  usage?: DashboardUsage;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
   const { data: session } = useSession();
-  const [subscription, setSubscription] = useState<UserSubscription | null>(null);
+  const [subscription, setSubscription] = useState<ExtendedUserSubscription | null>(null);
   const [credits, setCredits] = useState<UserCredits | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [storageUsage, setStorageUsage] = useState<{
+    used: number;
+    total: number;
+    percentage: number;
+  } | null>(null);
+
+  const [creditUsageData, setCreditUsageData] = useState<CreditUsageItem[]>([
+    { name: 'Tweets', value: 0 },
+    { name: 'Threads', value: 0 },
+    { name: 'AI Videos', value: 0 },
+    { name: 'AI Images', value: 0 }
+  ]);
+
+  const [metrics, setMetrics] = useState<MetricDataPoint[]>([
+    { name: 'Tweets', value: 0 },
+    { name: 'Threads', value: 0 },
+    { name: 'Images', value: 0 },
+    { name: 'Videos', value: 0 }
+  ]);
 
   useEffect(() => {
     const loadDashboardData = async () => {
       if (session?.user?.id) {
         try {
-          const [userSubscription, userCredits, userWorkspaces] = await Promise.all([
-            fetch('/api/user/subscription').then(res => res.json()),
-            fetch('/api/user/credits').then(res => res.json()),
-            WorkspaceClient.getWorkspaces()
+          console.log('🔄 Loading dashboard data for user:', session.user.id);
+          
+          // Get user document from Firestore to get subscription details
+          const userRef = doc(db, 'users', session.user.id);
+          const userDoc = await getDoc(userRef);
+          
+          if (!userDoc.exists()) {
+            console.log('❌ User document not found, creating default data');
+            // Create default user data if it doesn't exist
+            const defaultUserData = {
+              id: session.user.id,
+              email: session.user.email,
+              name: session.user.name,
+              subscription: {
+                plan: 'free',
+                status: 'trial',
+                startDate: Timestamp.now(),
+                endDate: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)),
+                trialEnd: Timestamp.fromDate(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))
+              },
+              usage: {
+                postsThisMonth: 0,
+                creditsThisMonth: 0,
+                storageUsed: 0
+              },
+              credits: {
+                available: 100,
+                used: 0,
+                total: 100,
+                lastRefill: Timestamp.now(),
+                nextRefill: Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+              },
+              workspaces: [],
+              createdAt: Timestamp.now(),
+              updatedAt: Timestamp.now(),
+            };
+            await setDoc(userRef, defaultUserData);
+            console.log('✅ Created new user document with default values');
+          }
+
+          const userData = userDoc.exists() ? userDoc.data() : null;
+          console.log('👤 User data:', userData);
+
+          if (!userData) {
+            throw new Error('Failed to load user data');
+          }
+
+          // Load workspaces directly from user data
+          const userWorkspaces = userData.workspaces || [];
+          let workspacesData: Workspace[] = [];
+          
+          if (userWorkspaces.length > 0) {
+            // Fetch workspace details
+            const workspaceDocs = await Promise.all(
+              userWorkspaces.map((wsId: string) => 
+                getDoc(doc(db, 'workspaces', wsId))
+              )
+            );
+            workspacesData = workspaceDocs
+              .filter(doc => doc.exists())
+              .map(doc => ({ id: doc.id, ...doc.data() } as Workspace));
+          }
+
+          // Get storage usage
+          const storage = await StorageUsageService.getStorageUsage(session.user.id)
+            .catch(() => ({ 
+              used: userData.usage?.storageUsed || 0, 
+              total: 1024 * 1024 * 1024, // 1GB default
+              percentage: ((userData.usage?.storageUsed || 0) / (1024 * 1024 * 1024)) * 100 
+            }));
+
+          // Set subscription data
+          const subscriptionData = {
+            ...userData.subscription,
+            usage: userData.usage || {
+              postsThisMonth: 0,
+              creditsThisMonth: 0,
+              storageUsed: 0,
+              threadsThisMonth: 0,
+              imagesThisMonth: 0,
+              videosThisMonth: 0
+            }
+          };
+
+          // Create properly typed credits object
+          const userCredits: UserCredits = {
+            userId: session.user.id,
+            available: userData.credits?.available || 0,
+            used: userData.credits?.used || 0,
+            total: userData.credits?.total || 0,
+            lastRefillDate: userData.credits?.lastRefill?.toMillis() || Date.now(),
+            nextRefillDate: userData.credits?.nextRefill?.toMillis() || Date.now() + (30 * 24 * 60 * 60 * 1000),
+            usageBreakdown: {
+              tweets: userData.usage?.postsThisMonth || 0,
+              threads: userData.usage?.threadsThisMonth || 0,
+              videos: userData.usage?.videosThisMonth || 0,
+              images: userData.usage?.imagesThisMonth || 0,
+              rewrites: 0,
+              storage: userData.usage?.storageUsed || 0
+            }
+          };
+
+          console.log('📊 Dashboard data loaded:', {
+            subscription: subscriptionData,
+            credits: userCredits,
+            workspaces: workspacesData,
+            storage
+          });
+
+          setSubscription(subscriptionData);
+          setCredits(userCredits);
+          setWorkspaces(workspacesData);
+          setStorageUsage(storage);
+
+          // Update credit usage distribution
+          setCreditUsageData([
+            { name: 'Tweets', value: userData.usage?.postsThisMonth || 0 },
+            { name: 'Threads', value: userData.usage?.threadsThisMonth || 0 },
+            { name: 'AI Videos', value: userData.usage?.videosThisMonth || 0 },
+            { name: 'AI Images', value: userData.usage?.imagesThisMonth || 0 }
           ]);
 
-          setSubscription(userSubscription);
-          setCredits(userCredits);
-          setWorkspaces(userWorkspaces);
+          // Set activity metrics
+          setMetrics([
+            { name: 'Tweets', value: userData.usage?.postsThisMonth || 0 },
+            { name: 'Threads', value: userData.usage?.threadsThisMonth || 0 },
+            { name: 'Images', value: userData.usage?.imagesThisMonth || 0 },
+            { name: 'Videos', value: userData.usage?.videosThisMonth || 0 }
+          ]);
 
-          if (userWorkspaces.length > 0) {
-            const defaultWorkspace = userWorkspaces[0];
+          if (workspacesData.length > 0) {
+            const defaultWorkspace = workspacesData[0];
             setSelectedWorkspace(defaultWorkspace);
-            const workspaceProjects = await WorkspaceClient.getWorkspaceProjects(defaultWorkspace.id);
-            setProjects(workspaceProjects);
+            
+            // Fetch projects for the default workspace
+            const projectsQuery = query(
+              collection(db, 'projects'),
+              where('workspaceId', '==', defaultWorkspace.id),
+              where('userId', '==', session.user.id)
+            );
+            const projectsSnap = await getDocs(projectsQuery);
+            const projectsData = projectsSnap.docs.map(doc => ({ 
+              id: doc.id, 
+              ...doc.data() 
+            })) as Project[];
+            setProjects(projectsData);
           }
         } catch (error) {
           console.error('Error loading dashboard data:', error);
@@ -79,25 +268,7 @@ export default function DashboardPage() {
     loadDashboardData();
   }, [session?.user?.id]);
 
-  // Sample data for charts
-  const creditUsageData = [
-    { name: 'Tweets', value: 45 },
-    { name: 'Threads', value: 20 },
-    { name: 'AI Videos', value: 15 },
-    { name: 'AI Images', value: 20 }
-  ];
-
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042'];
-
-  const activityData = [
-    { date: 'Mon', tweets: 4, threads: 2 },
-    { date: 'Tue', tweets: 3, threads: 1 },
-    { date: 'Wed', tweets: 7, threads: 3 },
-    { date: 'Thu', tweets: 5, threads: 2 },
-    { date: 'Fri', tweets: 6, threads: 4 },
-    { date: 'Sat', tweets: 2, threads: 1 },
-    { date: 'Sun', tweets: 3, threads: 2 }
-  ];
 
   // Helper function to safely calculate percentage
   const calculatePercentage = (used: number, total: number) => {
@@ -112,13 +283,21 @@ export default function DashboardPage() {
     return num;
   };
 
-  // Helper function to safely format dates
-  const formatDate = (timestamp: number | Timestamp | undefined | null) => {
-    if (!timestamp) return '';
+  // Helper function to format timestamp
+  const formatTimestamp = (timestamp: Timestamp | undefined | null) => {
+    if (!timestamp) return 'N/A';
     if (timestamp instanceof Timestamp) {
-      return timestamp.toDate().toLocaleDateString();
+      return timestamp.toDate().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
     }
-    return new Date(timestamp).toLocaleDateString();
+    return new Date(timestamp).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
   };
 
   const dashboardContent = (
@@ -135,7 +314,7 @@ export default function DashboardPage() {
         </Button>
       </div>
 
-      {/* Subscription & Credits Overview */}
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -145,9 +324,17 @@ export default function DashboardPage() {
           <CardContent>
             <div className="text-2xl font-bold capitalize">{subscription?.plan || 'Free'}</div>
             <p className="text-xs text-gray-500">
-              {subscription?.status === 'active' ? 'Active until ' : 'Expired'}
-              {formatDate(subscription?.currentPeriodEnd)}
+              {subscription?.currentPeriodEnd
+                ? `Valid until ${formatTimestamp(subscription.currentPeriodEnd)}`
+                : subscription?.status === 'trial'
+                  ? `Trial ends on ${formatTimestamp(subscription.trialEnd)}`
+                  : 'No active subscription'}
             </p>
+            {subscription?.status === 'past_due' && (
+              <p className="text-xs text-red-500 mt-1">
+                Your subscription payment is past due. Please update your payment method.
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -158,17 +345,21 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formatNumber(credits ? credits.totalCredits - credits.usedCredits : 0)}
+              {credits?.used || 0}/{credits?.total || 0}
             </div>
             <Progress 
-              value={calculatePercentage(
-                credits?.usedCredits || 0,
-                credits?.totalCredits || 1
-              )} 
-              className="mt-2"
+              value={calculatePercentage(credits?.used || 0, credits?.total || 100)} 
+              className={cn(
+                "mt-2",
+                credits?.used && credits.total && (credits.used / credits.total) >= 0.9 
+                  ? "bg-red-200" 
+                  : credits?.used && credits.total && (credits.used / credits.total) >= 0.75 
+                  ? "bg-yellow-200" 
+                  : "bg-blue-200"
+              )}
             />
             <p className="text-xs text-gray-500 mt-1">
-              {formatNumber(credits?.usedCredits)} used of {formatNumber(credits?.totalCredits)} total
+              {credits?.available || 0} credits remaining
             </p>
           </CardContent>
         </Card>
@@ -179,9 +370,9 @@ export default function DashboardPage() {
             <Users className="h-4 w-4 text-purple-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatNumber(workspaces.length)}</div>
+            <div className="text-2xl font-bold">{workspaces.length}</div>
             <p className="text-xs text-gray-500">
-              {formatNumber(projects.length)} active projects
+              {projects.length} active projects
             </p>
           </CardContent>
         </Card>
@@ -193,21 +384,28 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {formatNumber(subscription?.usageThisMonth?.storage || 0)} GB
+              {StorageUsageService.formatStorageSize(storageUsage?.used || 0)}
             </div>
             <Progress 
-              value={calculatePercentage(
-                subscription?.usageThisMonth?.storage || 0,
-                2 // Total storage limit
-              )} 
-              className="mt-2" 
+              value={storageUsage?.percentage || 0}
+              className={cn(
+                "mt-2",
+                storageUsage?.percentage && storageUsage.percentage >= 90 
+                  ? "bg-red-200" 
+                  : storageUsage?.percentage && storageUsage.percentage >= 75 
+                  ? "bg-yellow-200" 
+                  : "bg-blue-200"
+              )}
             />
             <p className="text-xs text-gray-500 mt-1">
-              {calculatePercentage(
-                subscription?.usageThisMonth?.storage || 0,
-                2
-              ).toFixed(0)}% of 2GB limit
+              {((storageUsage?.percentage || 0)).toFixed(1)}% of {StorageUsageService.formatStorageSize(storageUsage?.total || 0)} used
             </p>
+            {storageUsage?.percentage && storageUsage.percentage >= 90 && (
+              <p className="text-xs text-red-500 mt-1">Storage almost full!</p>
+            )}
+            {storageUsage?.percentage && storageUsage.percentage >= 75 && storageUsage.percentage < 90 && (
+              <p className="text-xs text-yellow-500 mt-1">Storage usage high</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -243,17 +441,16 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Weekly Activity</CardTitle>
+            <CardTitle>Activity Overview</CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={activityData}>
+              <BarChart data={metrics}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
+                <XAxis dataKey="name" />
                 <YAxis />
                 <Tooltip />
-                <Bar dataKey="tweets" fill="#8884d8" name="Tweets" />
-                <Bar dataKey="threads" fill="#82ca9d" name="Threads" />
+                <Bar dataKey="value" fill="#8884d8" />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -267,26 +464,29 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="flex items-center">
-              <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center">
-                <MessageSquare className="h-5 w-5 text-blue-600" />
+            {subscription?.recentActivity?.map((activity: RecentActivity, index: number) => (
+              <div key={index} className="flex items-center">
+                <div className={cn(
+                  "h-9 w-9 rounded-lg flex items-center justify-center",
+                  activity.type === 'tweet' ? "bg-blue-100" : "bg-green-100"
+                )}>
+                  {activity.type === 'tweet' ? (
+                    <MessageSquare className="h-5 w-5 text-blue-600" />
+                  ) : (
+                    <ImageIcon className="h-5 w-5 text-green-600" />
+                  )}
+                </div>
+                <div className="ml-4 space-y-1">
+                  <p className="text-sm font-medium">{activity.details}</p>
+                  <p className="text-xs text-gray-500">{formatTimestamp(activity.timestamp)}</p>
+                </div>
+                <div className="ml-auto font-medium">
+                  {activity.credits ? (
+                    <span className="text-red-500">-{activity.credits} credits</span>
+                  ) : null}
+                </div>
               </div>
-              <div className="ml-4 space-y-1">
-                <p className="text-sm font-medium">Generated 10 tweets</p>
-                <p className="text-xs text-gray-500">2 hours ago in Project X</p>
-              </div>
-              <div className="ml-auto font-medium">-10 credits</div>
-            </div>
-            <div className="flex items-center">
-              <div className="h-9 w-9 rounded-lg bg-green-100 flex items-center justify-center">
-                <ImageIcon className="h-5 w-5 text-green-600" />
-              </div>
-              <div className="ml-4 space-y-1">
-                <p className="text-sm font-medium">Generated AI image</p>
-                <p className="text-xs text-gray-500">5 hours ago in Project Y</p>
-              </div>
-              <div className="ml-auto font-medium">-2 credits</div>
-            </div>
+            ))}
           </div>
         </CardContent>
       </Card>

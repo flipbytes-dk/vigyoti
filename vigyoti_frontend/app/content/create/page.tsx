@@ -52,7 +52,7 @@ import { getSession } from "next-auth/react";
 import { doc, setDoc, updateDoc, serverTimestamp, getDoc, collection } from "firebase/firestore";
 import { db, storage } from "@/lib/firebase";
 import { v4 as uuidv4 } from 'uuid';
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { EditProvider, useEdit } from "../../contexts/EditContext";
 import { Tweet as FirebaseTweet, Workspace } from '@/types/firebase';
 import type { Tweet } from '@/types/tweet';
@@ -62,6 +62,7 @@ import { getAuth } from "firebase/auth";
 import { User } from "firebase/auth";
 import { useSession } from 'next-auth/react';
 import { CREDIT_COSTS } from '@/types/subscription';
+import { StorageUsageService } from '@/services/storage-usage';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -131,37 +132,44 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish, setEditingTweet }: Tw
   const createdAt = tweet.createdAt instanceof Timestamp ? tweet.createdAt.toDate() : new Date();
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors">
+    <div className="bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors max-w-[500px]">
       <div className="flex items-start space-x-3">
         <div className="h-10 w-10 rounded-full bg-gray-200 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-1">
-              <span className="font-bold text-gray-900">Your Name</span>
-              <span className="text-gray-500">@your_handle</span>
-              <span className="text-gray-500">·</span>
-              <span className="text-gray-500">{formatDistanceToNow(createdAt)}</span>
+              <span className="font-bold text-gray-900 text-sm">Your Name</span>
+              <span className="text-gray-500 text-sm">@your_handle</span>
+              <span className="text-gray-500 text-sm">·</span>
+              <span className="text-gray-500 text-sm">{formatDistanceToNow(createdAt)}</span>
             </div>
             <span className={cn(
-              "text-sm font-medium rounded-full px-2 py-1",
+              "text-xs font-medium rounded-full px-2 py-1",
               wordCount > 240 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
             )}>
               {wordCount}/280
             </span>
           </div>
-          <div className="mt-2 text-gray-900 whitespace-pre-wrap">{tweet.text}</div>
+          <div className="mt-2 text-gray-900 whitespace-pre-wrap text-[15px] leading-normal">{tweet.text}</div>
           {tweet.imageUrl && (
-            <div className="mt-3 rounded-xl overflow-hidden">
-              <img 
-                src={tweet.imageUrl} 
-                alt="Tweet media" 
-                className="w-full h-auto object-cover"
-                onLoad={() => console.log('Image loaded successfully:', tweet.imageUrl)}
-                onError={(e) => {
-                  console.error('Image failed to load:', tweet.imageUrl);
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
+            <div className="mt-3 rounded-xl overflow-hidden relative">
+              <div className="relative aspect-[1.91/1] max-h-[290px]">
+                <img 
+                  src={tweet.imageUrl} 
+                  alt="Tweet media" 
+                  className="absolute inset-0 w-full h-full object-cover rounded-2xl"
+                  onLoad={() => console.log('Image loaded successfully:', tweet.imageUrl)}
+                  onError={(e) => {
+                    console.error('Image failed to load:', tweet.imageUrl);
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+              </div>
+              {tweet.imageMetadata?.uploadType === 'ai_generated' && !tweet.imageUrl && (
+                <div className="absolute inset-0 bg-gray-100 animate-pulse flex items-center justify-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+                </div>
+              )}
             </div>
           )}
           <div className="mt-3 flex items-center justify-end space-x-2">
@@ -229,6 +237,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '9:16' | '16:9'>('1:1');
   const [style, setStyle] = useState<'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime'>('Auto');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   // Update local state when tweet prop changes
   useEffect(() => {
@@ -331,7 +340,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
         const imageUrl = await getDownloadURL(imageRef);
 
         // Deduct credits for image generation
-        await FirebaseService.deductCredits(session.user.id, CREDIT_COSTS.generateImage);
+        await FirebaseService.deductCredits(session.user.id, CREDIT_COSTS.generateImage, 'images');
 
         // Update tweet with new image
         const updatedTweet: FirebaseTweet = {
@@ -362,6 +371,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
 
   const handleImageUpload = async (file: File) => {
     if (!editingTweet) return;
+    setIsUploading(true);
     try {
       // Validate file size (2MB limit)
       const MAX_FILE_SIZE = 2 * 1024 * 1024;
@@ -384,6 +394,9 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
         return;
       }
 
+      // Check storage usage before upload
+      await StorageUsageService.trackFileUpload(session.user.id, file.size);
+
       // Create storage path
       const timestamp = Date.now();
       const safeFileName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
@@ -398,24 +411,24 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
           originalName: file.name,
           userId: session.user.id,
           projectId: editingTweet.projectId,
-          tweetId: editingTweet.id
+          tweetId: editingTweet.id,
+          fileSize: file.size.toString()
         }
       });
 
       // Get the storage URL
       const imageUrl = await getDownloadURL(imageRef);
 
-      // Update tweet with new image
+      // Create a clean version of the tweet for update
+      const { imageMetadata: _, ...tweetWithoutImage } = editingTweet;
+      
       const updatedTweet: FirebaseTweet = {
-        ...editingTweet,
+        ...tweetWithoutImage,
         imageUrl,
         imageMetadata: {
-          uploadType: 'user_upload',
+          uploadType: 'user_upload' as const,
           originalName: file.name,
-          storageRef,
-          aspectRatio: undefined,
-          styleType: undefined,
-          prompt: undefined
+          storageRef
         }
       };
 
@@ -424,7 +437,50 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
       toast.success('Image uploaded successfully');
     } catch (error) {
       console.error('Error uploading image:', error);
-      toast.error('Failed to upload image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      if (error instanceof Error && error.message.includes('Storage limit exceeded')) {
+        toast.error(error.message);
+      } else {
+        toast.error('Failed to upload image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Add a function to handle image deletion
+  const handleImageDelete = async (tweet: FirebaseTweet) => {
+    if (!tweet.imageMetadata?.storageRef) return;
+    
+    try {
+      const session = await getSession() as Session | null;
+      if (!session?.user?.id) {
+        toast.error('Please sign in to delete images');
+        return;
+      }
+
+      // Get the file size before deletion
+      const fileSize = await StorageUsageService.calculateFileSize(tweet.imageMetadata.storageRef);
+
+      // Delete from storage
+      const imageRef = ref(storage, tweet.imageMetadata.storageRef);
+      await deleteObject(imageRef);
+
+      // Update storage usage
+      await StorageUsageService.trackFileDeletion(session.user.id, fileSize);
+
+      // Update tweet
+      const updatedTweet: FirebaseTweet = {
+        ...tweet,
+        imageUrl: undefined,
+        imageMetadata: undefined
+      };
+
+      await handleEditTweet(updatedTweet);
+      setEditingTweet(updatedTweet);
+      toast.success('Image deleted successfully');
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      toast.error('Failed to delete image: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -459,11 +515,17 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
                   {editingTweet.imageUrl && (
                     <div className="mt-4 rounded-xl overflow-hidden relative group">
                       <img src={editingTweet.imageUrl} alt="Tweet media" className="w-full h-auto" />
+                      {(isGeneratingImage || isUploading) && (
+                        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
+                        </div>
+                      )}
                       <div className="absolute inset-0 bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                         <Button
                           variant="destructive"
                           size="sm"
                           onClick={() => setEditingTweet({ ...editingTweet, imageUrl: undefined, imageMetadata: undefined })}
+                          disabled={isGeneratingImage || isUploading}
                         >
                           Remove Image
                         </Button>
@@ -543,10 +605,12 @@ interface AddImageDialogProps {
   onUpload: (file: File) => void;
   onGenerate: (options: ImageGenerationOptions) => Promise<void>;
   defaultValues?: {
-    prompt?: string;
-    aspect_ratio?: string;
-    style_type?: string;
-    magic_prompt_option?: string;
+    prompt?: string | null;
+    aspectRatio?: string | null;
+    styleType?: string | null;
+    storageRef?: string;
+    uploadType?: 'ai_generated' | 'user_upload';
+    originalName?: string;
   } | null;
   tweet: FirebaseTweet;
 }
@@ -562,10 +626,10 @@ const AddImageDialog = ({
   const [method, setMethod] = useState<'upload' | 'generate'>('upload');
   const [isGenerating, setIsGenerating] = useState(false);
   const [aspectRatio, setAspectRatio] = useState<ImageGenerationOptions['aspect_ratio']>(
-    (defaultValues?.aspect_ratio as ImageGenerationOptions['aspect_ratio']) || "1:1"
+    (defaultValues?.aspectRatio as ImageGenerationOptions['aspect_ratio']) || "1:1"
   );
   const [style, setStyle] = useState<ImageGenerationOptions['style_type']>(
-    (defaultValues?.style_type as ImageGenerationOptions['style_type']) || "Auto"
+    (defaultValues?.styleType as ImageGenerationOptions['style_type']) || "Auto"
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -905,7 +969,7 @@ export default function CreateContent() {
         const imageUrl = await getDownloadURL(imageRef);
 
         // Deduct credits for image generation
-        await FirebaseService.deductCredits(session.user.id, CREDIT_COSTS.generateImage);
+        await FirebaseService.deductCredits(session.user.id, CREDIT_COSTS.generateImage, 'images');
 
         // Update tweet with new image
         const updatedTweet: FirebaseTweet = {
@@ -958,6 +1022,9 @@ export default function CreateContent() {
         return;
       }
 
+      // Check storage usage before upload
+      await StorageUsageService.trackFileUpload(session.user.id, file.size);
+
       // Create storage path
       const timestamp = Date.now();
       const safeFileName = file.name.replace(/[^a-zA-Z0-9.]/g, '_');
@@ -972,24 +1039,24 @@ export default function CreateContent() {
           originalName: file.name,
           userId: session.user.id,
           projectId: editingTweet.projectId,
-          tweetId: editingTweet.id
+          tweetId: editingTweet.id,
+          fileSize: file.size.toString()
         }
       });
 
       // Get the storage URL
       const imageUrl = await getDownloadURL(imageRef);
 
-      // Update tweet with new image
+      // Create a clean version of the tweet for update
+      const { imageMetadata: _, ...tweetWithoutImage } = editingTweet;
+      
       const updatedTweet: FirebaseTweet = {
-        ...editingTweet,
+        ...tweetWithoutImage,
         imageUrl,
         imageMetadata: {
-          uploadType: 'user_upload',
+          uploadType: 'user_upload' as const,
           originalName: file.name,
-          storageRef,
-          aspectRatio: undefined,
-          styleType: undefined,
-          prompt: undefined
+          storageRef
         }
       };
 
@@ -998,7 +1065,47 @@ export default function CreateContent() {
       toast.success('Image uploaded successfully');
     } catch (error) {
       console.error('Error uploading image:', error);
-      toast.error('Failed to upload image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      if (error instanceof Error && error.message.includes('Storage limit exceeded')) {
+        toast.error(error.message);
+      } else {
+        toast.error('Failed to upload image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    }
+  };
+
+  const handleImageDelete = async (tweet: FirebaseTweet) => {
+    if (!tweet.imageMetadata?.storageRef) return;
+    
+    try {
+      const session = await getSession() as Session | null;
+      if (!session?.user?.id) {
+        toast.error('Please sign in to delete images');
+        return;
+      }
+
+      // Get the file size before deletion
+      const fileSize = await StorageUsageService.calculateFileSize(tweet.imageMetadata.storageRef);
+
+      // Delete from storage
+      const imageRef = ref(storage, tweet.imageMetadata.storageRef);
+      await deleteObject(imageRef);
+
+      // Update storage usage
+      await StorageUsageService.trackFileDeletion(session.user.id, fileSize);
+
+      // Update tweet
+      const updatedTweet: FirebaseTweet = {
+        ...tweet,
+        imageUrl: undefined,
+        imageMetadata: undefined
+      };
+
+      await handleEditTweet(updatedTweet);
+      setEditingTweet(updatedTweet);
+      toast.success('Image deleted successfully');
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      toast.error('Failed to delete image: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -1433,7 +1540,7 @@ export default function CreateContent() {
           <h3 className="text-lg font-semibold">Review Generated Content</h3>
         </div>
         
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 place-items-center">
           {tweets.map((tweet) => (
             <TweetCard
               key={tweet.id}

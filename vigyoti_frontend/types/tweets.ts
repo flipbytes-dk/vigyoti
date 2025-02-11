@@ -27,9 +27,9 @@ export interface Tweet extends Omit<FirebaseTweet, 'createdAt' | 'updatedAt'> {
 
 // Image-related interfaces
 export interface TweetImageMetadata {
-  prompt?: string;
-  aspectRatio?: string;
-  styleType?: string;
+  prompt?: string | null;
+  aspectRatio?: string | null;
+  styleType?: string | null;
   storageRef?: string;
   uploadType?: 'ai_generated' | 'user_upload';
   originalName?: string;

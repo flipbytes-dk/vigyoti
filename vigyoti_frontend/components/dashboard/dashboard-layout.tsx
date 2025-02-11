@@ -156,79 +156,85 @@ export default function DashboardLayout({
     .toUpperCase() || '??';
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Header with workspace selector */}
-      <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b bg-white px-4 shadow-sm">
+    <div className="min-h-screen bg-gray-50">
+      {/* Top Navigation Bar */}
+      <div className="fixed top-0 right-0 left-0 z-50 h-16 bg-white border-b flex items-center justify-between px-4">
         <div className="flex items-center gap-4">
-          <Link href="/dashboard">
-            <Image
-              src="/vigyoti-logo-only.png"
-              alt="Vigyoti Logo"
-              width={120}
-              height={32}
-              className="h-8 w-auto"
-            />
-          </Link>
-          {workspaces.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="gap-2">
-                  <span>{selectedWorkspace?.name || 'Select Workspace'}</span>
-                  <ChevronDown className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-56">
-                {workspaces.map((workspace) => (
-                  <DropdownMenuItem 
-                    key={workspace.id}
-                    onClick={() => handleWorkspaceChange(workspace)}
-                  >
-                    {workspace.name}
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/workspaces" className="flex items-center">
-                    <Plus className="mr-2 h-4 w-4" />
-                    <span>Create New Workspace</span>
-                  </Link>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-        <div className="flex items-center gap-4">
+          {/* Workspace Selector */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="gap-2">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src={session?.user?.image || ''} />
-                  <AvatarFallback>{userInitials}</AvatarFallback>
-                </Avatar>
-                <span className="hidden md:inline-block">{session?.user?.name}</span>
-                <ChevronDown className="h-4 w-4" />
+              <Button variant="ghost" className="flex items-center gap-2">
+                <Briefcase className="h-4 w-4" />
+                <span>{selectedWorkspace?.name || workspaceName}</span>
+                <ChevronDown className="h-4 w-4 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem asChild>
-                <Link href="/dashboard/profile" className="flex items-center">
-                  <Settings className="mr-2 h-4 w-4" />
-                  <span>Settings</span>
-                </Link>
-              </DropdownMenuItem>
+            <DropdownMenuContent align="start" className="w-[200px]">
+              {workspaces.map((workspace) => (
+                <DropdownMenuItem
+                  key={workspace.id}
+                  onClick={() => handleWorkspaceChange(workspace)}
+                  className="flex items-center justify-between"
+                >
+                  <span>{workspace.name}</span>
+                  {selectedWorkspace?.id === workspace.id && (
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                  )}
+                </DropdownMenuItem>
+              ))}
               <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href="/api/auth/signout" className="flex items-center text-red-600">
-                  <LogOut className="mr-2 h-4 w-4" />
-                  <span>Log out</span>
+              <DropdownMenuItem>
+                <Link href="/workspaces/new" className="flex items-center">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create New Workspace
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </header>
 
-      <div className="flex">
+        {/* Right side user menu */}
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" className="text-gray-700">
+            <Link href="/dashboard/credits" className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              <span>Credits</span>
+            </Link>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={session?.user?.image || ''} alt={session?.user?.name || ''} />
+                  <AvatarFallback>{userInitials}</AvatarFallback>
+                </Avatar>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <div className="flex flex-col space-y-1 p-2">
+                <p className="text-sm font-medium">{session?.user?.name}</p>
+                <p className="text-xs text-gray-500">{session?.user?.email}</p>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <Link href="/dashboard/profile" className="flex items-center">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Settings
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="text-red-600">
+                <Link href="/api/auth/signout" className="flex items-center">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Logout
+                </Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <div className="flex pt-16"> {/* Add padding-top to account for the fixed header */}
         {/* Sidebar */}
         <aside className={cn(
           "fixed left-0 z-40 h-[calc(100vh-4rem)] w-64 border-r bg-white transition-transform overflow-y-auto",
@@ -318,15 +324,15 @@ export default function DashboardLayout({
           </div>
         </aside>
 
-        {/* Main Content */}
-        <main className={cn(
+        {/* Main content */}
+        <div className={cn(
           "flex-1 transition-all duration-200",
           isSidebarOpen ? "ml-64" : "ml-0"
         )}>
-          <div className="container mx-auto p-6">
+          <div className="container mx-auto p-8">
             {children}
           </div>
-        </main>
+        </div>
       </div>
     </div>
   );

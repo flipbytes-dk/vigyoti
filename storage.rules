@@ -6,14 +6,58 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return request.auth.uid == userId;
+    function isValidSize() {
+      return request.resource.size <= 5 * 1024 * 1024;  // 5MB limit
     }
 
-    // Allow access to project images if user is authenticated and has access to the project
-    match /projects/{projectId}/tweets/{tweetId}/images/{imageId} {
+    function isValidContentType() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    // Simplified storage check without Firestore dependency
+    function isReasonableSize() {
+      return request.resource.size <= 5 * 1024 * 1024;  // 5MB per file is reasonable
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getCurrentStorageUsage() {
+      let userData = getUserData();
+      return userData.data.usage.storageUsed || 0;
+    }
+
+    function getPlanStorageLimit() {
+      let userData = getUserData();
+      let plan = userData.data.subscription.plan || 'free';
+      let limits = {
+        'free': 1 * 1024 * 1024 * 1024,    // 1GB
+        'solo': 1 * 1024 * 1024 * 1024,    // 5GB
+        'team': 2 * 1024 * 1024 * 1024,   // 10GB
+        'agency': 5 * 1024 * 1024 * 1024  // 50GB
+      };
+      return limits[plan];
+    }
+
+    function isWithinStorageLimit() {
+      let currentUsage = getCurrentStorageUsage();
+      let newFileSize = request.resource.size;
+      let maxStorageLimit = getPlanStorageLimit();
+      return (currentUsage + newFileSize) <= maxStorageLimit;
+    }
+
+    // Match the exact path structure used in the application
+    match /projects/{projectId}/tweets/{tweetId}/images/{imageName} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow create, update: if isAuthenticated()
+                          && isValidSize()
+                          && isValidContentType();
+    }
+
+    // Allow reading project-level data
+    match /projects/{projectId}/{allPaths=**} {
+      allow read: if isAuthenticated();
     }
 
     // Deny access to all other paths by default

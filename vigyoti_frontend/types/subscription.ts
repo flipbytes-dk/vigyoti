@@ -54,9 +54,19 @@ export interface UserSubscription {
 
 export interface UserCredits {
   userId: string;
-  totalCredits: number;
-  usedCredits: number;
+  available: number;
+  used: number;
+  total: number;
   lastRefillDate: number;
+  nextRefillDate: number;
+  usageBreakdown: {
+    tweets: number;
+    threads: number;
+    videos: number;
+    images: number;
+    rewrites: number;
+    storage: number;
+  };
 }
 
 export interface PlanFeatures {

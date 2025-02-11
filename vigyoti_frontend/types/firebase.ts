@@ -79,9 +79,9 @@ export interface Tweet {
   status: 'draft' | 'published' | 'scheduled';
   imageUrl?: string;
   imageMetadata?: {
-    prompt?: string;
-    aspectRatio?: string;
-    styleType?: string;
+    prompt?: string | null;
+    aspectRatio?: string | null;
+    styleType?: string | null;
     storageRef?: string;
     uploadType?: 'ai_generated' | 'user_upload';
     originalName?: string;

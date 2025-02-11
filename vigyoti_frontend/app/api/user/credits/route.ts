@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../auth/[...nextauth]/route';
-import { PLAN_FEATURES } from '@/types/subscription';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 export async function GET() {
   try {
@@ -10,27 +11,38 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // TODO: Implement actual credits check from your database
-    // For now, return default credits based on free plan
-    const currentPlan = 'free';
-    const totalCredits = PLAN_FEATURES[currentPlan].aiCreditsPerMonth;
+    // Get user document to get credits information
+    const userRef = doc(db, 'users', session.user.id);
+    const userDoc = await getDoc(userRef);
+    
+    if (!userDoc.exists()) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    const userData = userDoc.data();
+    const credits = userData.credits || {
+      available: 0,
+      used: 0,
+      total: 0,
+      lastRefill: null,
+      nextRefill: null
+    };
 
     return NextResponse.json({
-      available: totalCredits,
-      used: 0,
-      total: totalCredits,
-      resetDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
-      usageBreakdown: {
-        tweets: 0,
-        threads: 0,
-        videos: 0,
-        images: 0,
-        rewrites: 0,
-        storage: 0,
-      },
+      available: credits.available,
+      used: credits.used,
+      total: credits.total,
+      resetDate: credits.nextRefill?.toDate(),
+      usageBreakdown: userData.usage || {
+        postsThisMonth: 0,
+        creditsThisMonth: 0,
+        storageUsed: 0
+      }
     });
   } catch (error) {
     console.error('Error getting user credits:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ 
+      error: error instanceof Error ? error.message : 'Internal server error' 
+    }, { status: 500 });
   }
 } 

@@ -322,7 +322,29 @@ export class FirebaseService {
         updatedAt: Timestamp.now(),
       };
 
-      await setDoc(projectRef, projectData);
+      // Initialize storage structure with a placeholder file
+      const placeholderPath = `projects/${projectRef.id}/.placeholder`;
+      const placeholderRef = ref(storage, placeholderPath);
+      const placeholderContent = new Blob([''], { type: 'text/plain' });
+      
+      // Create project document and storage structure in parallel
+      await Promise.all([
+        setDoc(projectRef, projectData),
+        uploadBytes(placeholderRef, placeholderContent, {
+          contentType: 'text/plain',
+          customMetadata: {
+            projectId: projectRef.id,
+            userId,
+            createdAt: Timestamp.now().toMillis().toString()
+          }
+        })
+      ]);
+
+      console.log('✅ Created project with storage structure:', {
+        projectId: projectRef.id,
+        storagePath: `projects/${projectRef.id}`
+      });
+
       return projectRef.id;
     } catch (error) {
       console.error('Error creating project:', error);
@@ -384,14 +406,53 @@ export class FirebaseService {
   }
 
   static async uploadImage(projectId: string, tweetId: string, imageBlob: Blob): Promise<string> {
-    const timestamp = Date.now();
-    const imagePath = `projects/${projectId}/tweets/${tweetId}/images/${timestamp}.png`;
-    const imageRef = ref(storage, imagePath);
-    
-    await uploadBytes(imageRef, imageBlob);
-    const imageUrl = await getDownloadURL(imageRef);
-    
-    return imageUrl;
+    try {
+      console.log('📤 Starting image upload process:', { projectId, tweetId });
+      
+      // Ensure we have valid data
+      if (!projectId || !tweetId || !imageBlob) {
+        throw new Error('Missing required parameters for image upload');
+      }
+
+      // Verify that the image blob is actually an image
+      if (!imageBlob.type.startsWith('image/')) {
+        throw new Error('Invalid file type. Only images are allowed.');
+      }
+
+      // Create the full path including all necessary folders
+      const timestamp = Date.now();
+      const imagePath = `projects/${projectId}/tweets/${tweetId}/images/generated_${timestamp}.png`;
+      console.log('🔄 Generated image path:', imagePath);
+
+      // Create a reference to the image location
+      const imageRef = ref(storage, imagePath);
+      
+      // Set proper metadata for the upload
+      const metadata = {
+        contentType: 'image/png',
+        customMetadata: {
+          projectId,
+          tweetId,
+          uploadedAt: timestamp.toString(),
+          uploadType: 'generated'
+        }
+      };
+
+      // Attempt to upload the image
+      console.log('🔄 Uploading image with metadata:', metadata);
+      await uploadBytes(imageRef, imageBlob, metadata);
+      
+      // Get the download URL
+      console.log('✅ Upload successful, retrieving download URL');
+      const imageUrl = await getDownloadURL(imageRef);
+      console.log('🔗 Image URL generated:', imageUrl);
+      
+      return imageUrl;
+    } catch (error) {
+      console.error('❌ Error in uploadImage:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error during image upload';
+      throw new Error(`Failed to upload image: ${errorMessage}`);
+    }
   }
 
   // Add usage tracking methods
@@ -434,14 +495,17 @@ export class FirebaseService {
     }
   }
 
-  static async deductCredits(userId: string, amount: number): Promise<boolean> {
+  static async deductCredits(userId: string, amount: number, usageType: 'tweets' | 'threads' | 'videos' | 'images' | 'rewrites' | 'storage' = 'tweets'): Promise<boolean> {
     try {
-      console.log('💸 Deducting credits:', { userId, amount });
+      console.log('💸 Deducting credits:', { userId, amount, usageType });
       
       const userRef = doc(db, 'users', userId);
+      const creditsRef = doc(db, 'credits', userId);
       
       await runTransaction(db, async (transaction) => {
         const userDoc = await transaction.get(userRef);
+        const creditsDoc = await transaction.get(creditsRef);
+        
         if (!userDoc.exists()) {
           throw new Error('User not found');
         }
@@ -459,12 +523,48 @@ export class FirebaseService {
           throw new Error('Insufficient credits');
         }
 
+        const newAvailable = currentCredits - amount;
+        const newUsed = (userData.credits?.used || 0) + amount;
+
+        // Update user document
         transaction.update(userRef, {
-          'credits.available': increment(-amount),
-          'credits.used': increment(amount),
+          'credits.available': newAvailable,
+          'credits.used': newUsed,
           'usage.postsThisMonth': increment(1),
           updatedAt: serverTimestamp()
         });
+
+        // Update credits collection
+        if (creditsDoc.exists()) {
+          const creditsData = creditsDoc.data();
+          transaction.update(creditsRef, {
+            available: newAvailable,
+            used: newUsed,
+            updatedAt: serverTimestamp(),
+            [`usageBreakdown.${usageType}`]: increment(amount)
+          });
+        } else {
+          // Create new credits document if it doesn't exist
+          transaction.set(creditsRef, {
+            userId,
+            available: newAvailable,
+            total: userData.credits.total,
+            used: newUsed,
+            lastRefillDate: userData.credits.lastRefill,
+            nextRefillDate: userData.credits.nextRefill,
+            canPurchaseCredits: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            usageBreakdown: {
+              tweets: usageType === 'tweets' ? amount : 0,
+              threads: usageType === 'threads' ? amount : 0,
+              videos: usageType === 'videos' ? amount : 0,
+              images: usageType === 'images' ? amount : 0,
+              rewrites: usageType === 'rewrites' ? amount : 0,
+              storage: usageType === 'storage' ? amount : 0
+            }
+          });
+        }
       });
 
       console.log('✅ Credits deducted successfully');
