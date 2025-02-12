@@ -1,7 +1,7 @@
 from youtube_transcript_api import YouTubeTranscriptApi
 from typing import Optional, Dict, List, Literal, Tuple
 import re
-from openai import OpenAI
+from openai import AsyncOpenAI
 import os
 from ...schemas.content import YouTubeMetadata
 from ...core.exceptions import ContentProcessingError
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Configure proxy settings for YouTube transcript API
 YOUTUBE_PROXIES = {"https": settings.SMARTPROXY_URL}
@@ -103,7 +103,7 @@ async def fetch_transcript_and_summary(video_id: str) -> Dict[str, str]:
         full_transcript = " ".join([entry["text"] for entry in transcript_list])
         
         # Generate summary using OpenAI
-        summary_response = client.chat.completions.create(
+        summary_response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that creates concise summaries."},
@@ -137,7 +137,7 @@ async def generate_summary(transcript: str) -> Tuple[str, Dict]:
         """
 
         # Generate summary using OpenAI
-        summary_response = client.chat.completions.create(
+        summary_response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
                 {
@@ -209,7 +209,100 @@ async def generate_twitter_content(
 ) -> List[str]:
     """Generate Twitter content from video transcript."""
     try:
-        if content_type == "short":
+        # Use higher max_tokens for premium long content
+        max_tokens = 7000 if is_premium and content_type == "long" else 1000
+
+        if content_type == "long" and is_premium:
+            # For premium long posts, create original content inspired by the video
+            prompt = f"""Using the ideas and concepts from this video content as inspiration, create {num_tweets} engaging, comprehensive, and conversational {'piece' if num_tweets == 1 else 'pieces'}. Don't describe or reference the video itself - instead, create original content that explores the topics, concepts, and ideas presented.
+
+The content should be your own original take on these topics:
+{summary}
+
+Title Guidelines:
+- Each title MUST follow this EXACT format: "Title Text Here"
+- Title text must be between 30-35 characters (excluding the number prefix)
+- Keep titles professional and clear
+- Avoid special characters, emojis, or excessive punctuation in titles
+- Each title should be a hook but maintain consistent length with others
+- Titles should be complete phrases, not fragments
+
+Content Guidelines:
+- Create original, valuable content that stands on its own
+- Don't describe or reference the video or its content directly
+- Write in a natural, flowing conversational style
+- Share insights, perspectives, and practical applications
+- Break down complex ideas into digestible sections
+- Include relevant examples and real-world applications
+- Weave in your own insights and expert perspectives
+- You MUST use formatting (paragraphs, emojis) to enhance readability
+- You MUST use bold or italics or insert emojis to emphasize key points
+- Include relevant hashtags where they fit naturally
+- Each piece should be between 1,000 and 25,000 characters
+- Each piece should explore different aspects or angles of the topics
+
+Style Notes:
+- Write as if you're having an engaging conversation with the reader
+- Use transitional phrases to connect ideas smoothly
+- Share original insights and unique perspectives
+- Make it engaging and shareable while being informative
+- Use emojis sparingly and naturally, not forcing them
+
+Additional Context:
+{additional_context if additional_context else 'Focus on providing valuable insights and perspectives on these topics.'}
+
+Please generate {num_tweets} separate {'piece' if num_tweets == 1 else 'pieces'}, each exploring different aspects of these topics. Start each piece with the title format specified above, then separate pieces with [NEW_CONTENT] marker."""
+
+            response = await client.chat.completions.create(
+                model=settings.OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert at creating engaging, conversational long-form content that feels natural and flowing, while being informative and valuable."
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=max_tokens
+            )
+
+            # Get the content and clean it up
+            content = response.choices[0].message.content.strip()
+            
+            # Split content into separate pieces
+            pieces = content.split('[NEW_CONTENT]')
+            
+            # Clean and process each piece
+            processed_pieces = []
+            for piece in pieces:
+                if piece.strip():
+                    # Clean up the piece
+                    cleaned_piece = piece.strip()
+                    # Remove any "Analysis:" or similar prefixes
+                    cleaned_piece = re.sub(r'^(Analysis|Section|Part)\s*\d*:?\s*', '', cleaned_piece, flags=re.MULTILINE)
+                    
+                    # Ensure minimum length
+                    if len(cleaned_piece) >= 1000:
+                        # Enforce maximum length while keeping content coherent
+                        if len(cleaned_piece) > 25000:
+                            cleaned_piece = cleaned_piece[:25000]
+                            # Try to find a proper sentence ending to cut at
+                            last_period = cleaned_piece.rfind('.')
+                            if last_period > 1000:  # Only cut at period if we still have >1000 chars
+                                cleaned_piece = cleaned_piece[:last_period + 1]
+                        processed_pieces.append(cleaned_piece)
+            
+            # Ensure we have the requested number of pieces
+            if len(processed_pieces) < num_tweets:
+                logger.warning(f"Generated only {len(processed_pieces)} pieces, regenerating...")
+                return await generate_twitter_content(transcript, summary, content_type, num_tweets, additional_context, is_premium)
+            
+            # If we have too many pieces, take only the requested number
+            processed_pieces = processed_pieces[:num_tweets]
+            
+            return processed_pieces
+
+        elif content_type == "short":
             prompt = f"""Generate {num_tweets} impactful and informative tweets from this video content. Each tweet should be a complete, standalone insight.
 
 Summary of the Content:
@@ -222,7 +315,7 @@ Requirements for Each Tweet:
 1. Length and Format:
    - Maximum 280 characters per tweet
    - Each tweet must be complete and meaningful on its own
-   - Start each tweet with "Tweet X:" (where X is the number)
+   - Do not include any numbering or prefixes
 
 2. Content Guidelines:
    - Focus on one clear, specific point per tweet
@@ -241,66 +334,14 @@ Requirements for Each Tweet:
 4. Structure for Each Tweet:
    [Relevant Emoji(s)] → [Key Point/Insight] → [Supporting Detail if space allows] → [Relevant Hashtag(s)]
 
-Example Format (Do not use this content, just the structure):
-"Tweet 1: 🚀💡 Breaking: New AI model achieves 95% accuracy in medical diagnosis. This breakthrough could revolutionize early disease detection in rural areas. #AIinHealthcare #MedTech"
-
 Additional Context to Consider:
 {additional_context if additional_context else 'Focus on the most impactful insights from the content.'}
 
-Generate {num_tweets} unique, high-quality tweets, each focusing on a different aspect of the content:"""
+Generate {num_tweets} unique, high-quality tweets, each focusing on a different aspect of the content."""
 
-            response = client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an expert social media content creator who specializes in distilling complex information into clear, engaging tweets. You:
-- Focus on accuracy and value in each tweet
-- Use data and specific details when available
-- Create tweets that people would want to share
-- Maintain professionalism while being engaging
-- Never sacrifice accuracy for engagement"""
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-
-            generated_content = response.choices[0].message.content
-            
-            # Improved tweet splitting logic
-            tweets = []
-            
-            # Split by common tweet markers
-            patterns = [
-                r'\d+[\)\.]\s*',  # matches "1.", "1)", "2.", "2)", etc.
-                r'\n+[\-\*]\s*',   # matches new lines with bullets
-                r'\n\s*\n',       # matches double newlines
-                r'\n*\d+/\d+\s*'  # matches "1/5", "2/5", etc.
-            ]
-            
-            # Combine patterns into one
-            split_pattern = '|'.join(patterns)
-            
-            # Split and clean tweets
-            raw_tweets = re.split(split_pattern, generated_content)
-            tweets = [
-                re.sub(r'^[^A-Za-z0-9]*', '', tweet.strip())  # Remove leading special chars
-                for tweet in raw_tweets
-                if tweet and tweet.strip()
-            ]
-
-            # Ensure we have exactly the requested number of tweets
-            if len(tweets) > num_tweets:
-                tweets = tweets[:num_tweets]
-            while len(tweets) < num_tweets:
-                tweets.append(f"Additional insights from the video: {summary[:100]}...")
-
-            return tweets
         else:
-            # Original logic for non-premium/non-long tweets
+            # For threads and other types
             is_thread = content_type == "thread"
-            
             prompt = f"""Based on this video content, generate {num_tweets} {'tweet' if num_tweets == 1 else 'tweets'}.
 
 Summary: {summary}
@@ -314,11 +355,9 @@ Tweet Style: {'Thread' if is_thread else 'Independent Tweets'}
 {additional_context if additional_context else ''}
 
 Guidelines:
-- For short tweets, keep within 280 characters
+- Keep tweets within 280 characters
 - Include relevant hashtags where appropriate
 - Maintain engaging tone and clarity
-- Each tweet should be on a new line starting with a number (1., 2., etc.)
-- Do not include any other separators or markers
 - Use appropriate emojis to enhance the message (1-3 emojis per tweet)
 - Place emojis at the start of key points or alongside important terms
 - Ensure emojis are relevant to the content (e.g., 🤖 for AI, 📊 for data, 💡 for insights)
@@ -327,60 +366,48 @@ Guidelines:
 {'''- Make tweets flow logically from one to the next
 - Each tweet should build upon the previous one
 - Maintain narrative continuity throughout the thread
-- First tweet should hook the reader with engaging emoji
+- First tweet should hook the reader
 - Last tweet should provide a strong conclusion
 - Use consistent emoji themes throughout the thread''' if is_thread else '''- Each tweet should be completely independent
 - Cover different aspects or insights from the content
 - Each tweet should make sense on its own
 - No need for continuity between tweets
-- Avoid references to other tweets
-- Use distinct emoji sets for each tweet to match its specific topic'''}
+- Use distinct emoji sets for each tweet'''}
 
 Generate the tweets:"""
 
-            response = client.chat.completions.create(
+        # Generate content for non-premium long posts
+        if not (content_type == "long" and is_premium):
+            response = await client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=[
                     {
-                        "role": "system", 
-                        "content": "You are a social media expert who creates engaging Twitter content. "
-                                 + ("For threads, you create connected, flowing narratives. " if is_thread else "For multiple tweets, you create distinct, independent posts. ")
+                        "role": "system",
+                        "content": "You are an expert at creating engaging Twitter content."
                     },
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7
+                temperature=0.7,
+                max_tokens=max_tokens
             )
 
-            generated_content = response.choices[0].message.content
+            content = response.choices[0].message.content.strip()
             
-            # Improved tweet splitting logic
+            # Split content into tweets
             tweets = []
+            for tweet in content.split('\n\n'):
+                if tweet.strip():
+                    # Clean up the tweet text
+                    clean_tweet = re.sub(r'^[^A-Za-z0-9]*', '', tweet.strip())
+                    if clean_tweet:
+                        tweets.append(clean_tweet[:280])  # Enforce character limit
             
-            # Split by common tweet markers
-            patterns = [
-                r'\d+[\)\.]\s*',  # matches "1.", "1)", "2.", "2)", etc.
-                r'\n+[\-\*]\s*',   # matches new lines with bullets
-                r'\n\s*\n',       # matches double newlines
-                r'\n*\d+/\d+\s*'  # matches "1/5", "2/5", etc.
-            ]
-            
-            # Combine patterns into one
-            split_pattern = '|'.join(patterns)
-            
-            # Split and clean tweets
-            raw_tweets = re.split(split_pattern, generated_content)
-            tweets = [
-                re.sub(r'^[^A-Za-z0-9]*', '', tweet.strip())  # Remove leading special chars
-                for tweet in raw_tweets
-                if tweet and tweet.strip()
-            ]
-
             # Ensure we have exactly the requested number of tweets
             if len(tweets) > num_tweets:
                 tweets = tweets[:num_tweets]
             while len(tweets) < num_tweets:
                 tweets.append(f"Additional insights from the video: {summary[:100]}...")
-
+            
             return tweets
 
     except Exception as e:
@@ -437,7 +464,7 @@ async def process_text_to_twitter(
         logger.error(f"Error in process_text_to_twitter: {str(e)}")
         raise ContentProcessingError(f"Failed to process text to Twitter: {str(e)}")
 
-def generate_additional_tweets(
+async def generate_additional_tweets(
     transcript: str,
     content_type: str,
     remaining_tweets: int,
@@ -446,7 +473,7 @@ def generate_additional_tweets(
 ) -> Tuple[str, Dict]:
     """Generate additional tweets if needed"""
     try:
-        additional_response = client.chat.completions.create(
+        additional_response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": "You are a social media expert who creates engaging Twitter content."},

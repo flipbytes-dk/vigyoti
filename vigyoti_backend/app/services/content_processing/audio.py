@@ -84,6 +84,25 @@ async def generate_twitter_content(
         is_are = "are" if num_tweets > 1 else "is"
         plural_suffix = "s" if num_tweets > 1 else ""
         
+        # Use higher max_tokens for premium long content
+        max_tokens = 7000 if is_premium and content_type == "long" else 1000
+
+        # For premium long posts, enhance the prompt
+        if content_type == "long" and is_premium:
+            additional_context = (additional_context or "") + """
+            Since this is a premium post, please provide a comprehensive analysis that:
+            1. Describes the audio content in detail
+            2. Explores multiple perspectives and interpretations
+            3. Connects to broader industry trends and implications
+            4. Includes relevant examples and case studies
+            5. Offers actionable insights and takeaways
+            6. Uses formatting (paragraphs, emojis) for better readability
+            7. Aims for at least 1000 words of engaging content
+            8. Includes key timestamps and highlights from the audio
+            9. Provides context and background information
+            10. Summarizes main takeaways and conclusions
+            """
+        
         # Get content type guidelines
         content_type_guidelines = TWITTER_CONTENT_GUIDELINES.get(content_type, TWITTER_CONTENT_GUIDELINES["short"])
         
@@ -97,7 +116,7 @@ Requirements for Each Tweet:
 1. Length and Format:
    - Maximum 280 characters per tweet
    - Each tweet must be complete and meaningful on its own
-   - Start each tweet with "Tweet X:" (where X is the number)
+   - Do not include any numbering or prefixes
 
 2. Content Guidelines:
    - Focus on one clear, specific point per tweet
@@ -121,95 +140,119 @@ Additional Context to Consider:
 
 Generate EXACTLY {num_tweets} unique, high-quality tweets, each focusing on a different aspect of the content."""
         else:
-            is_thread = content_type == "thread"
+            # For long-form premium content or threads
             prompt = f"""Based on this audio transcription, generate {num_tweets} {'tweet' if num_tweets == 1 else 'tweets'}.
 
 Content: {text}
 
 Content Type: {content_type}
 Number of Tweets: {num_tweets}
-Tweet Style: {'Thread' if is_thread else 'Independent Tweets'}
+Tweet Style: {'Premium Long-Form Post' if content_type == 'long' and is_premium else 'Thread' if content_type == 'thread' else 'Independent Tweets'}
 
 {additional_context if additional_context else ''}
 
 Guidelines:
-- For short tweets, keep within 280 characters
+- {'Create a comprehensive, well-structured post up to 25,000 characters' if content_type == 'long' and is_premium else 'Keep tweets within 280 characters'}
 - Include relevant hashtags where appropriate
 - Maintain engaging tone and clarity
-- Each tweet should be on a new line starting with "Tweet X:" (where X is the number)
-- Do not include any other separators or markers
 - Use appropriate emojis to enhance the message (1-3 emojis per tweet)
 - Place emojis at the start of key points or alongside important terms
 - Ensure emojis are relevant to the content (e.g., 🤖 for AI, 📊 for data, 💡 for insights)
 
-{'Thread-specific guidelines:' if is_thread else 'Independent tweets guidelines:'}
-{'''- Make tweets flow logically from one to the next
+{'Premium content guidelines:' if content_type == 'long' and is_premium else 'Thread-specific guidelines:' if content_type == 'thread' else 'Independent tweets guidelines:'}
+{'''- Create a comprehensive, well-structured analysis
+- Break down complex topics into digestible sections
+- Use formatting for better readability
+- Include timestamps for key moments
+- Provide actionable insights and takeaways
+- Connect ideas to broader industry trends
+- End with clear conclusions and next steps''' if content_type == 'long' and is_premium else '''- Make tweets flow logically
 - Each tweet should build upon the previous one
-- Maintain narrative continuity throughout the thread
-- First tweet should hook the reader with engaging emoji
+- Maintain narrative continuity
+- First tweet should hook the reader
 - Last tweet should provide a strong conclusion
-- Use consistent emoji themes throughout the thread''' if is_thread else '''- Each tweet should be completely independent
-- Cover different aspects or insights from the content
-- Each tweet should make sense on its own
+- Use consistent emoji themes''' if content_type == 'thread' else '''- Each tweet should be independent
+- Cover different aspects of the content
+- Each tweet should make sense alone
 - No need for continuity between tweets
-- Avoid references to other tweets
-- Use distinct emoji sets for each tweet to match its specific topic'''}
+- Use distinct emoji sets per tweet'''}
 
-Generate EXACTLY {num_tweets} tweets:"""
+Generate the content:"""
         
         # Get response from GPT
         response = await client.chat.completions.create(
             model=settings.OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": "You are a social media expert who creates engaging content for Twitter/X."},
+                {
+                    "role": "system",
+                    "content": """You are an expert social media content creator who specializes in audio content. 
+                    For premium users creating long-form content, you write comprehensive, well-structured posts 
+                    that are several paragraphs long (at least 1000 words) and make full use of the 25,000 character limit.
+                    For regular users, you create concise, impactful tweets within 280 characters."""
+                },
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1000 if is_premium else 500
+            max_tokens=max_tokens
         )
         
         # Extract tweets from response
         content = response.choices[0].message.content.strip()
         logger.info(f"[generate_twitter_content] Raw GPT response content: {content[:200]}...")
         
-        # Parse numbered tweets
-        tweet_pattern = r"Tweet (\d+):(.*?)(?=Tweet \d+:|$)"
-        matches = re.finditer(tweet_pattern, content, re.DOTALL)
-        
-        tweets_dict = {}
-        for match in matches:
-            number = int(match.group(1))
-            tweet_text = match.group(2).strip()
-            tweets_dict[number] = tweet_text
-        
-        logger.info(f"[generate_twitter_content] Found {len(tweets_dict)} tweets in GPT response")
-        
-        # Ensure tweets are in correct order and we have exactly num_tweets
-        tweets_text = [tweets_dict.get(i+1, f"Generated tweet {i+1} from audio content") for i in range(num_tweets)]
-        logger.info(f"[generate_twitter_content] Final tweets_text array length: {len(tweets_text)}")
-        
         # Calculate GPT costs using completion object
         gpt_costs = CostCalculator.calculate_gpt_cost(prompt, content, completion=response)
         
         tweets = []
-        for i, tweet_text in enumerate(tweets_text):
+        
+        # Handle premium long-form content
+        if content_type == "long" and is_premium:
+            # For premium long posts, treat the entire content as one post with 25,000 char limit
+            tweet_text = content[:25000] if len(content) > 25000 else content
             tweet_dict = {
                 "tweet_text": tweet_text,
-                "is_thread": num_tweets > 1,
-                "thread_position": i + 1 if num_tweets > 1 else None,
+                "is_thread": False,
+                "thread_position": None,
                 "image_url": None,
-                "is_premium_content": is_premium
+                "is_premium_content": True
             }
-            
-            # Generate image for the first tweet if requested
-            if generate_image and i == 0:
-                logger.info("Generating image for first tweet...")
-                image_url = await generate_image_from_text(text[:500])
-                if image_url:
-                    tweet_dict["image_url"] = image_url
-                    logger.info(f"Added image URL to tweet: {image_url}")
-            
             tweets.append(tweet_dict)
+        else:
+            # For regular posts, split and process
+            # Parse numbered tweets
+            tweet_pattern = r"Tweet (\d+):(.*?)(?=Tweet \d+:|$)"
+            matches = re.finditer(tweet_pattern, content, re.DOTALL)
+            
+            tweets_dict = {}
+            for match in matches:
+                number = int(match.group(1))
+                tweet_text = match.group(2).strip()
+                tweets_dict[number] = tweet_text
+            
+            logger.info(f"[generate_twitter_content] Found {len(tweets_dict)} tweets in GPT response")
+            
+            # Ensure tweets are in correct order and we have exactly num_tweets
+            tweets_text = [tweets_dict.get(i+1, f"Generated tweet {i+1} from audio content") for i in range(num_tweets)]
+            logger.info(f"[generate_twitter_content] Final tweets_text array length: {len(tweets_text)}")
+            
+            for i, tweet_text in enumerate(tweets_text):
+                tweet_dict = {
+                    "tweet_text": tweet_text,
+                    "is_thread": num_tweets > 1,
+                    "thread_position": i + 1 if num_tweets > 1 else None,
+                    "image_url": None,
+                    "is_premium_content": False
+                }
+                
+                # Generate image for the first tweet if requested
+                if generate_image and i == 0:
+                    logger.info("Generating image for first tweet...")
+                    image_url = await generate_image_from_text(text[:500])
+                    if image_url:
+                        tweet_dict["image_url"] = image_url
+                        logger.info(f"Added image URL to tweet: {image_url}")
+                
+                tweets.append(tweet_dict)
         
         logger.info(f"Generated {len(tweets)} tweets")
         return tweets, gpt_costs

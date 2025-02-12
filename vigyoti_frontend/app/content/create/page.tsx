@@ -63,6 +63,9 @@ import { User } from "firebase/auth";
 import { useSession } from 'next-auth/react';
 import { CREDIT_COSTS } from '@/types/subscription';
 import { StorageUsageService } from '@/services/storage-usage';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Components } from 'react-markdown';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -118,7 +121,32 @@ interface TweetCardProps {
   setEditingTweet: (tweet: FirebaseTweet | null) => void;
 }
 
-const TweetCard = ({ tweet, onEdit, onSchedule, onPublish, setEditingTweet }: TweetCardProps) => {
+// Add type definition for markdown components
+type ComponentType = Components[keyof Components];
+
+const markdownComponents: Components = {
+  p: ({ children, ...props }) => <p className="mb-2" {...props}>{children}</p>,
+  h1: ({ children, ...props }) => <h1 className="text-xl font-bold mb-2" {...props}>{children}</h1>,
+  h2: ({ children, ...props }) => <h2 className="text-lg font-bold mb-2" {...props}>{children}</h2>,
+  h3: ({ children, ...props }) => <h3 className="text-base font-bold mb-2" {...props}>{children}</h3>,
+  ul: ({ children, ...props }) => <ul className="list-disc ml-4 mb-2" {...props}>{children}</ul>,
+  ol: ({ children, ...props }) => <ol className="list-decimal ml-4 mb-2" {...props}>{children}</ol>,
+  li: ({ children, ...props }) => <li className="mb-1" {...props}>{children}</li>,
+  a: ({ href, children, ...props }) => (
+    <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer" {...props}>
+      {children}
+    </a>
+  ),
+  blockquote: ({ children, ...props }) => (
+    <blockquote className="border-l-4 border-gray-300 pl-4 italic my-2" {...props}>{children}</blockquote>
+  ),
+  code: ({ children, ...props }) => <code className="bg-gray-100 px-1 rounded" {...props}>{children}</code>,
+  pre: ({ children, ...props }) => <pre className="bg-gray-100 p-2 rounded my-2 overflow-x-auto" {...props}>{children}</pre>,
+  em: ({ children, ...props }) => <em className="italic" {...props}>{children}</em>,
+  strong: ({ children, ...props }) => <strong className="font-bold" {...props}>{children}</strong>,
+};
+
+const TweetCard = ({ tweet, onEdit, onSchedule, onPublish, setEditingTweet, className }: TweetCardProps & { className?: string }) => {
   const handleCopy = () => {
     navigator.clipboard.writeText(tweet.text);
     toast.success('Tweet copied to clipboard');
@@ -132,25 +160,40 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish, setEditingTweet }: Tw
   const createdAt = tweet.createdAt instanceof Timestamp ? tweet.createdAt.toDate() : new Date();
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors max-w-[500px]">
-      <div className="flex items-start space-x-3">
+    <div className={cn(
+      "bg-white border border-gray-200 rounded-xl p-4 hover:bg-gray-50 transition-colors w-full flex flex-col min-w-0",
+      className
+    )}>
+      <div className="flex items-start space-x-3 flex-grow min-w-0">
         <div className="h-10 w-10 rounded-full bg-gray-200 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-1">
-              <span className="font-bold text-gray-900 text-sm">Your Name</span>
-              <span className="text-gray-500 text-sm">@your_handle</span>
+        <div className="flex-1 min-w-0 flex flex-col h-full">
+          {/* Header section */}
+          <div className="flex items-center justify-between h-[60px] flex-wrap gap-2">
+            <div className="flex items-center flex-wrap gap-1">
+              <span className="font-bold text-gray-900 text-sm truncate">Your Name</span>
+              <span className="text-gray-500 text-sm truncate">@your_handle</span>
               <span className="text-gray-500 text-sm">·</span>
-              <span className="text-gray-500 text-sm">{formatDistanceToNow(createdAt)}</span>
+              <span className="text-gray-500 text-sm truncate">{formatDistanceToNow(createdAt)}</span>
             </div>
             <span className={cn(
-              "text-xs font-medium rounded-full px-2 py-1",
+              "text-xs font-medium rounded-full px-2 py-1 whitespace-nowrap",
               wordCount > 240 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
             )}>
               {wordCount}/280
             </span>
           </div>
-          <div className="mt-2 text-gray-900 whitespace-pre-wrap text-[15px] leading-normal">{tweet.text}</div>
+          
+          {/* Content section */}
+          <div className="mt-2 text-gray-900 break-words text-[15px] leading-normal prose prose-sm max-w-none flex-grow">
+            <ReactMarkdown 
+              remarkPlugins={[remarkGfm]} 
+              components={markdownComponents}
+            >
+              {tweet.text}
+            </ReactMarkdown>
+          </div>
+          
+          {/* Image section */}
           {tweet.imageUrl && (
             <div className="mt-3 rounded-xl overflow-hidden relative">
               <div className="relative aspect-[1.91/1] max-h-[290px]">
@@ -165,14 +208,11 @@ const TweetCard = ({ tweet, onEdit, onSchedule, onPublish, setEditingTweet }: Tw
                   }}
                 />
               </div>
-              {tweet.imageMetadata?.uploadType === 'ai_generated' && !tweet.imageUrl && (
-                <div className="absolute inset-0 bg-gray-100 animate-pulse flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
-                </div>
-              )}
             </div>
           )}
-          <div className="mt-3 flex items-center justify-end space-x-2">
+          
+          {/* Actions section - fixed height and proper alignment */}
+          <div className="mt-3 flex items-center justify-end gap-1 pt-2 border-t border-gray-100">
             <Button variant="ghost" size="sm" onClick={handleCopy} className="text-gray-500 hover:text-blue-500">
               <Copy className="h-4 w-4 mr-1" />
               Copy
@@ -233,6 +273,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
   const [editingTweet, setEditingTweet] = useState<FirebaseTweet | null>(tweet);
   const [showAddImage, setShowAddImage] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [isImageLoading, setIsImageLoading] = useState(false);
   const [videoSummary, setVideoSummary] = useState('');
   const [aspectRatio, setAspectRatio] = useState<'1:1' | '9:16' | '16:9'>('1:1');
   const [style, setStyle] = useState<'Auto' | 'General' | 'Realistic' | 'Design' | 'Render 3D' | 'Anime'>('Auto');
@@ -246,6 +287,13 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
     setEditingTweet(tweet);
     setCustomPrompt(tweet?.imageMetadata?.prompt || '');
   }, [tweet]);
+
+  // Reset image loading state when editingTweet changes
+  useEffect(() => {
+    if (editingTweet?.imageUrl) {
+      setIsImageLoading(true);
+    }
+  }, [editingTweet?.imageUrl]);
 
   const handleTextChange = (text: string) => {
     if (!editingTweet) return;
@@ -623,7 +671,25 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
                   {editingTweet.imageUrl && (
                     <div className="mt-4 space-y-4">
                       <div className="rounded-xl overflow-hidden relative group">
-                        <img src={editingTweet.imageUrl} alt="Tweet media" className="w-full h-auto" />
+                        {isImageLoading && (
+                          <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" />
+                          </div>
+                        )}
+                        <img 
+                          src={editingTweet.imageUrl} 
+                          alt="Tweet media" 
+                          className="w-full h-auto"
+                          onLoad={() => {
+                            console.log('Image loaded successfully:', editingTweet.imageUrl);
+                            setIsImageLoading(false);
+                          }}
+                          onError={(e) => {
+                            console.error('Image failed to load:', editingTweet.imageUrl);
+                            setIsImageLoading(false);
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
                         {(isGeneratingImage || isUploading) && (
                           <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white" />
@@ -729,6 +795,7 @@ const EditTweetModal: React.FC<EditTweetModalProps> = ({
               onSchedule={() => {}}
               onPublish={() => {}}
               setEditingTweet={() => {}}
+              className="h-full"
             />
           </div>
         </div>
@@ -1011,6 +1078,8 @@ export default function CreateContent() {
   const [projectDescription, setProjectDescription] = useState('');
   const [contentType, setContentType] = useState<'short' | 'long' | 'thread' | 'quote' | 'poll'>('short');
   const [numberOfTweets, setNumberOfTweets] = useState(1);
+  const [debouncedNumberOfTweets, setDebouncedNumberOfTweets] = useState(1);
+  const [isNumberOfTweetsValid, setIsNumberOfTweetsValid] = useState(true);
   const [additionalContext, setAdditionalContext] = useState('');
   const [isPremium, setIsPremium] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1102,11 +1171,27 @@ export default function CreateContent() {
     setTweets([]);
   };
 
+  // Add debounce effect for number of tweets
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const parsedValue = parseInt(numberOfTweets.toString());
+      if (!isNaN(parsedValue) && parsedValue >= 1 && parsedValue <= 10) {
+        setDebouncedNumberOfTweets(parsedValue);
+        setIsNumberOfTweetsValid(true);
+      } else {
+        setIsNumberOfTweetsValid(false);
+      }
+    }, 500); // 500ms delay
+
+    return () => clearTimeout(timer);
+  }, [numberOfTweets]);
+
   const isFormValid = () => {
     return projectName.trim() !== '' && 
            sourceUrl.trim() !== '' && 
            ['short', 'long', 'thread', 'quote', 'poll'].includes(contentType) &&
-           numberOfTweets > 0;
+           isNumberOfTweetsValid &&
+           debouncedNumberOfTweets >= 1;
   };
 
   const handleImageGeneration = async (options: ImageGenerationOptions): Promise<void> => {
@@ -1684,15 +1769,33 @@ export default function CreateContent() {
                 min={1}
                 max={10}
                 value={numberOfTweets}
-                onChange={(e) => setNumberOfTweets(parseInt(e.target.value))}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Allow empty value during typing
+                  if (value === '') {
+                    setNumberOfTweets(value as any);
+                    return;
+                  }
+                  const numValue = parseInt(value);
+                  if (!isNaN(numValue)) {
+                    setNumberOfTweets(numValue);
+                  }
+                }}
                 className={cn(
                   "bg-white border-gray-300 focus:border-blue-500",
-                  numberOfTweets < 1 && "border-red-300 focus:border-red-500"
+                  !isNumberOfTweetsValid && "border-red-300 focus:border-red-500"
                 )}
               />
-              <p className="text-sm text-gray-500 mt-1">
-                Number of tweets to generate (1-10)
-              </p>
+              <div className="mt-1">
+                <p className="text-sm text-gray-500">
+                  Number of tweets to generate (1-10)
+                </p>
+                {!isNumberOfTweetsValid && (
+                  <p className="text-sm text-red-500 mt-1">
+                    Please enter a number between 1 and 10
+                  </p>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1788,16 +1891,18 @@ export default function CreateContent() {
         
         {renderVideoContent()}
         
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 place-items-center">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 w-full">
           {tweets.map((tweet) => (
-            <TweetCard
-              key={tweet.id}
-              tweet={tweet}
-              onEdit={handleEditTweet}
-              onSchedule={() => handleScheduleTweet(tweet)}
-              onPublish={() => handlePublishTweet(tweet)}
-              setEditingTweet={setEditingTweet}
-            />
+            <div key={tweet.id} className="w-full">
+              <TweetCard
+                tweet={tweet}
+                onEdit={handleEditTweet}
+                onSchedule={() => handleScheduleTweet(tweet)}
+                onPublish={() => handlePublishTweet(tweet)}
+                setEditingTweet={setEditingTweet}
+                className="h-full"
+              />
+            </div>
           ))}
         </div>
       </div>
@@ -1833,16 +1938,14 @@ export default function CreateContent() {
                     : "bg-white shadow-sm hover:border-blue-200"
                 )}
               >
-                <div className="space-y-2">
-                  <div className={cn(
-                    "text-sm font-medium",
-                    currentStep === step.number ? "text-blue-600" : "text-gray-500"
-                  )}>
-                    Step {step.number}
-                  </div>
-                  <h3 className="text-lg font-semibold">{step.title}</h3>
-                  <p className="text-sm text-gray-500">{step.description}</p>
+                <div className={cn(
+                  "text-sm font-medium",
+                  currentStep === step.number ? "text-blue-600" : "text-gray-500"
+                )}>
+                  Step {step.number}
                 </div>
+                <h3 className="text-lg font-semibold">{step.title}</h3>
+                <p className="text-sm text-gray-500">{step.description}</p>
               </Card>
             ))}
           </div>
